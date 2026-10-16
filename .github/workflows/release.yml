@@ -1,0 +1,49 @@
+name: Release
+
+# Publishes a GitHub release when a version tag is pushed (git tag v1.2.3 && git push --tags):
+# CI runs first, then one binary per platform is built from the tagged commit and attached,
+# with SHA-256 checksums.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          # A release build starts from the module files alone, never from a cache.
+          cache: false
+      - name: Build
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          mkdir dist
+          for target in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
+            os=${target%/*}; arch=${target#*/}
+            name="rustle-mcp_${version}_${os}_${arch}"
+            mkdir "$name"
+            binary=rustle-mcp; [ "$os" = windows ] && binary=rustle-mcp.exe
+            GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$version" -o "$name/$binary" .
+            cp LICENSE README.md "$name/"
+            if [ "$os" = windows ]; then zip -qr "dist/$name.zip" "$name"; else tar -czf "dist/$name.tar.gz" "$name"; fi
+          done
+          (cd dist && sha256sum * > checksums.txt)
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" dist/* --title "$TAG" --generate-notes --verify-tag
