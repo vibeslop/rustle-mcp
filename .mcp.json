@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "rustle": {
+      "command": "./rustle-mcp",
+      "args": []
+    }
+  }
+}

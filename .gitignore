@@ -1,0 +1,7 @@
+# The binary `go build -o rustle-mcp .` writes, which .mcp.json runs.
+/rustle-mcp
+/rustle-mcp.exe
+/dist/
+*.test
+*.out
+.DS_Store

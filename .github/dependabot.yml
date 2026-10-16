@@ -1,0 +1,7 @@
+version: 2
+updates:
+  # Rustle has no Go dependencies; the workflows' actions are what can go stale.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
