@@ -66,7 +66,7 @@ Out-of-range arguments are clamped and unknown ones ignored, each with a note in
 
 ## Configuration
 
-All settings are optional environment variables, set in the client's `env` block for the server.
+All settings are optional environment variables, set in the client's `env` block for the server, or on the host for a hosted server; `rustle-mcp deploy` sets what Vercel needs.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -80,12 +80,33 @@ All settings are optional environment variables, set in the client's `env` block
 | `RUSTLE_WHISPER_MODEL` | unset | A ggml model for whisper.cpp's `whisper-cli`. With both installed, `read_transcript` can transcribe videos that have no captions. |
 | `RUSTLE_PREFETCH` | on | At startup, fetch the visitor id YouTube requires, so the first YouTube call is faster. `0` makes Rustle contact YouTube only when asked to. |
 | `RUSTLE_WARM` | on | Keep a few ffmpeg processes started and waiting, saving 20–40 ms per decode. `0` turns it off. Not on Windows. |
+| `RUSTLE_TOKEN` | unset | Required by `rustle-mcp http`: the token in the server's address, `/mcp/<token>`, or sent as a bearer token. |
+| `HTTPS_PROXY` | unset | A proxy for Rustle's requests. On a hosted server, a backup used while YouTube refuses the WARP tunnel. |
+| `RUSTLE_PROXIES` | unset | Proxies to try in order, separated by commas, moving on while YouTube refuses one; `direct` is none. Replaces the hosted server's own list. |
+| `WIREGUARD_CONFIG` | unset | In the container: a WireGuard profile, any VPN's, to tunnel through instead of a new WARP device. `RUSTLE_WARP=0` goes without WARP. |
+| `RUSTLE_BACKUP` | unset | Another Rustle server's address, which makes the calls YouTube refuses this one. `rustle-mcp deploy` sets it. |
 | `RUSTLE_DEBUG` | unset | `1` adds each call's timing to its result. |
 | `RUSTLE_TRACE` | unset | `1` logs every ffmpeg run and network request to stderr. |
 
+## Hosting
+
+Rustle can also run on a server, for agents that can't start a program on your computer, such as claude.ai. One command puts it on Vercel's free plan:
+
+```sh
+rustle-mcp deploy
+```
+
+It logs you in to Vercel first if needed (through the Vercel CLI, which Node's `npx` fetches), deploys the server, checks that YouTube answers it, and prints its private address. In claude.ai, open Settings, then Connectors, add a custom connector, paste the address and choose No sign-in. The command also prints a line for Claude Code, Codex and Cursor. Running it again updates the server and keeps the address.
+
+**How it gets past YouTube.** YouTube refuses most data-center addresses with "Sign in to confirm you're not a bot". So the server registers a free Cloudflare WARP device as it starts and sends its requests through that tunnel, over IPv4, from an address YouTube trusts far more than the host's. Which addresses it trusts varies by region and changes over time: in October 2026 it accepted WARP's exits in Frankfurt, Washington, San Francisco, São Paulo, Sydney and Cape Town, and refused London, Tokyo, Singapore and Mumbai. So `rustle-mcp deploy` sets up two servers, in Frankfurt and in Washington (`--region` picks the first). When YouTube refuses the first, it hands that call to the other and returns its answer.
+
+**Other hosts.** Any host that runs containers can build the repository's `Dockerfile`, such as Railway or Render. Set `RUSTLE_TOKEN` to a long random string; the address is then `https://your-host/mcp/<token>`, and opening the server in a browser shows how to connect each client. `RUSTLE_BACKUP` can name a second server's address, and `HTTPS_PROXY` a proxy, such as a paid residential one, which Rustle then uses only while YouTube refuses the tunnel.
+
+On a server, local paths are off unless `RUSTLE_MEDIA_ROOTS` names folders on it. Vercel caps a response at 4.5 MB, so long `listen_video` clips can fail there for clients that hear audio.
+
 ## Privacy and limits
 
-Rustle runs on your machine, next to your agent, and has no telemetry. It contacts only the sources your agent asks for, plus YouTube at startup unless `RUSTLE_PREFETCH=0`. It is built for local use: YouTube is far stricter with requests from servers in data centers, so hosting Rustle for others is not supported.
+Rustle runs on your machine, next to your agent, and has no telemetry. It contacts only the sources your agent asks for, plus YouTube at startup unless `RUSTLE_PREFETCH=0`. A hosted Rustle does the same from its server, through Cloudflare's WARP, registering a free WARP device each time it starts.
 
 CI runs on macOS, Linux and Windows; on Windows, ffmpeg processes aren't started ahead of calls, so decodes take 20–40 ms longer.
 
