@@ -1,6 +1,6 @@
 # AGENTS.md
 
-You are changing Rustle, a stdio MCP server that lets agents read videos: transcripts, frames and sound from YouTube, web pages, media URLs and local files. The connected model does the reading, looking and listening; Rustle fetches, decodes and sizes what the model is handed. It is written in Go, ships as one static binary per platform with no dependencies beyond Go's standard library, and runs on the user's machine next to their agent. Hosting it for others is a non-goal: YouTube treats requests from data centers as bots.
+You are changing Rustle, an MCP server that lets agents read videos: transcripts, frames and sound from YouTube, web pages, media URLs and local files. The connected model does the reading, looking and listening; Rustle fetches, decodes and sizes what the model is handed. It is written in Go, ships as one static binary per platform with no dependencies beyond Go's standard library, and runs on the user's machine next to their agent, over stdio. `rustle-mcp http` serves the same tools over HTTP for agents that can't start a local program; YouTube refuses most data-center addresses, so a hosted server reaches it through a Cloudflare WARP tunnel, with other routes behind it. `rustle-mcp deploy` sets the whole thing up on Vercel in one command, and setting it up must stay that short.
 
 The README is for people deciding to use Rustle. This file is for changing it.
 
@@ -10,7 +10,7 @@ The README is for people deciding to use Rustle. This file is for changing it.
 2. **What Rustle draws is what the model sees.** Harnesses resize and re-encode images past their limits (Claude Code: over 2000 px or 3.75 MB; Codex: shrinks to a 768 px short side unless asked for the original). Keep images inside them, or the model gets a worse picture than the one you tested.
 3. **Speed.** The server answers its client in a few milliseconds, and most calls take tens to hundreds of milliseconds. The costs are starting ffmpeg, decoding, and network round trips; measure before and after a change that touches them (`RUSTLE_DEBUG=1` puts each call's milliseconds in its metadata, `RUSTLE_TRACE=1` logs every ffmpeg run and request).
 4. **Small.** Standard library only, one binary of about 7 MB. Prefer a few lines of code to a package.
-5. **Private.** No telemetry, no keys, no inference API. Rustle contacts only the sources an agent asks for, plus YouTube's visitor id at startup.
+5. **Private.** No telemetry, no keys, no inference API. Rustle contacts only the sources an agent asks for, plus YouTube's visitor id at startup; a hosted server also registers a WARP device with Cloudflare.
 
 Prefer simple systems and software that feels obvious. Find the real constraint, then make the smallest change that makes the behaviour unsurprising. Don't keep complexity because it exists, and don't add machinery because it looks thorough. These are defaults, not rules: the developer you are working with can override any of them.
 
@@ -28,13 +28,13 @@ Prefer simple systems and software that feels obvious. Find the real constraint,
 
 ## Where things are
 
-- `main.go`: startup and the CLI (`--help`, `--version`); `setup.go`: `rustle-mcp setup`, which adds the binary to Claude Code, Codex and Cursor, ticked in a checklist (`checklist.go`, keys read by `internal/term`). `install.sh` and `install.ps1` download the latest release and run it, so installing is one command; keep it that way.
-- `internal/mcp`: the stdio JSON-RPC transport. `internal/tools`: tool schemas, argument parsing, how results are rendered, and one file per tool.
+- `main.go`: startup and the CLI (`--help`, `--version`, `http`); `deploy.go`: `rustle-mcp deploy`, which puts Rustle on Vercel; `tunnel.go` and `warp.go`: the WARP tunnel `rustle-mcp http` starts when wireproxy is installed, as in the container; `setup.go`: `rustle-mcp setup`, which adds the binary to Claude Code, Codex and Cursor, ticked in a checklist (`checklist.go`, keys read by `internal/term`). `install.sh` and `install.ps1` download the latest release and run it, so installing is one command; keep it that way.
+- `internal/mcp`: the JSON-RPC transports, stdio and Streamable HTTP (`http.go`; `Dockerfile`, `Dockerfile.vercel` and `vercel.json` host it). `internal/tools`: tool schemas, argument parsing, how results are rendered, one file per tool, and handing calls YouTube refuses to a backup server (`backup.go`).
 - `internal/source`: turning a source into a record (`Identify`, `Resolve`, `Probed`, `MediaInput`), web pages and local folders.
 - `internal/youtube`: player requests, captions, DASH windows, storyboards, search.
 - `internal/media`: ffmpeg commands, frame sampling, sheet layout, the MP4 index reader. `internal/imaging`: the JPEG and PNG encoders and the bitmap font. `internal/audio`: analysis, FFT, spectrogram.
 - `internal/transcript`: caption parsing, paragraphs, search and the digest.
-- `internal/rustle`: what every package shares: settings, errors, records, the cache, ordered metadata (`Obj`, `Compact`). `internal/proc`: running processes; `internal/fetch`: HTTP; `internal/jsonv`: order-preserving JSON for YouTube's responses.
+- `internal/rustle`: what every package shares: settings, errors, records, the cache, ordered metadata (`Obj`, `Compact`). `internal/proc`: running processes; `internal/fetch`: HTTP, and the routes it moves down while YouTube refuses one (`routes.go`); `internal/jsonv`: order-preserving JSON for YouTube's responses.
 - Tests sit next to the code (`*_test.go`), offline; fixtures are generated where possible (`internal/testmedia`). `scripts/smoke`: every tool against live YouTube.
 
 ## Commands
@@ -44,6 +44,9 @@ go build -o rustle-mcp .    # the binary .mcp.json points at
 go vet ./...
 go test ./...               # offline, a few seconds; frame tests skip without ffmpeg
 go run ./scripts/smoke      # builds, then calls every tool on live YouTube; needs the network
+docker build -t rustle-mcp . && docker run -p 8080:8080 -e RUSTLE_TOKEN=dev rustle-mcp
+go run ./scripts/smoke http://localhost:8080/mcp/dev                 # the same checks, hosted
+./rustle-mcp deploy --name rustle-mcp-test   # a deployment of this checkout to try
 ```
 
 To release, tag the commit and push the tag: `git tag v1.2.3 && git push origin v1.2.3`. The tag starts `.github/workflows/release.yml`, which runs CI, cross-compiles a binary per platform and publishes them, with checksums, as a GitHub release. The install scripts fetch it from `releases/latest/download/`, so asset names carry no version.
@@ -56,6 +59,8 @@ To release, tag the commit and push the tag: `git tag v1.2.3 && git push origin 
 - **Testing an old build.** Clients run the binary, not the source. Rebuild and reconnect the server before judging a change through a client. Don't kill MCP server processes you didn't start: you may be running inside the client that owns them.
 - **Letting the tool surface drift.** Every character in a description or schema is paid on every request. Put guidance in a result's `hint` or notes, where it costs only when it applies.
 - **Changing an image size casually.** It changes the token cost and can cross a harness limit. Check `ImageTokens` and the harness limits above, and keep sheets in whole patches.
+- **Assuming one client.** Over HTTP, many clients share one process, and any instance of it may answer a request. What differs per client travels with each request: the client's name rides in the session id (`internal/mcp/http.go`), request ids are only unique within a session, and local files are off unless `RUSTLE_MEDIA_ROOTS` names folders.
+- **Moving the hosted server.** YouTube trusts some addresses more than others, the trust is a probability rather than a list, and it changes: Washington's WARP exit went from refused to accepted within an hour. In October 2026, from Vercel over WARP's IPv4, 20 videos passed in Frankfurt, Washington, San Francisco, São Paulo, Sydney and Cape Town, and were refused in London, Tokyo, Singapore and Mumbai; WARP's IPv6 exits were refused five times in six. That is why a deployment is two servers in two regions (`deploy.go`, `internal/tools/backup.go`) and why the tunnel is IPv4 only (`tunnel.go`). Run the smoke script against a deployment before changing any of it.
 - **Network in tests.** Tests must pass offline; stub requests with `fetch.SetTransport` as the existing tests do. Live checks belong in `scripts/smoke`.
 - **Third-party content in the repo.** Don't commit real transcripts, lyrics or other people's video files as fixtures. Generate them.
 
