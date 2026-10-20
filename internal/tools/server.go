@@ -193,6 +193,11 @@ func tool[T any](s *Server, name, description string, schema *rustle.Obj, parse 
 			call.Notes.Add(notes...)
 			result, err = op(call, parsed)
 			if err != nil {
+				if s.settings.Backup != "" && rustle.HasCode(err, "YOUTUBE_ACCESS_DENIED") && !mcp.Forwarded(ctx) {
+					if out, ferr := forward(ctx, s.settings.Backup, client, name, raw); ferr == nil {
+						return out
+					}
+				}
 				return errorResult(err)
 			}
 			all := call.Notes.List()

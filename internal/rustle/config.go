@@ -24,6 +24,9 @@ type Settings struct {
 	FFmpeg  string
 	FFprobe string
 	Debug   bool
+	// Backup is another Rustle server's address, in another region, which makes the calls
+	// YouTube refuses this one.
+	Backup string
 }
 
 // Env looks up an environment variable; an empty value counts as set.
@@ -150,6 +153,7 @@ func LoadSettings(env Env) (*Settings, error) {
 	s.FFprobe, _ = env("RUSTLE_FFPROBE")
 	debug, _ := env("RUSTLE_DEBUG")
 	s.Debug = debug == "1"
+	s.Backup, _ = env("RUSTLE_BACKUP")
 	return s, nil
 }
 
