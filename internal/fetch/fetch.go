@@ -55,6 +55,7 @@ var (
 func newTransport() *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.MaxIdleConnsPerHost = 16
+	t.Proxy = proxy
 	t.DialContext = (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext
 	return t
 }
@@ -197,12 +198,17 @@ func once(ctx context.Context, url string, o Options, rt http.RoundTripper) (*Re
 		for k, v := range o.Headers {
 			req.Header.Set(k, v)
 		}
+		via := Route()
 		resp, err := client.Do(req)
 		if err != nil {
 			cancel()
 			lastErr = err
 			if ctx.Err() != nil {
 				break
+			}
+			// A proxy that can't be reached is skipped, and the retry takes the next route.
+			if proxyDown(err) {
+				Refuse(via)
 			}
 			continue
 		}
