@@ -183,7 +183,7 @@ func exists(path string) bool {
 // RootsError says why path may not be read, and how to allow it.
 func RootsError(path string, s *rustle.Settings) *rustle.Error {
 	if len(s.MediaRoots) == 0 {
-		return rustle.Fail("Local files are disabled on this server (RUSTLE_MEDIA_ROOTS is empty).", "LOCAL_FILES_DISABLED",
+		return rustle.Fail("Local files are disabled on this server.", "LOCAL_FILES_DISABLED",
 			"Pass a YouTube link or a web URL instead of a local path.")
 	}
 	var shown []string

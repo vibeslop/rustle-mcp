@@ -162,7 +162,7 @@ func TestRootsError(t *testing.T) {
 	wantError(t, RootsError(path, settings(t, missing)), "OUTSIDE_MEDIA_ROOTS",
 		"/elsewhere/a.mp4 is outside the folders Rustle may read: none exist.", fix)
 	wantError(t, RootsError(path, settings(t)), "LOCAL_FILES_DISABLED",
-		"Local files are disabled on this server (RUSTLE_MEDIA_ROOTS is empty).", "Pass a YouTube link or a web URL instead of a local path.")
+		"Local files are disabled on this server.", "Pass a YouTube link or a web URL instead of a local path.")
 }
 
 func TestAssertMediaFile(t *testing.T) {
@@ -295,7 +295,7 @@ func TestIdentify(t *testing.T) {
 		_, err := Identify(filepath.Join(dir, "link.mp4"), s)
 		wantError(t, err, "OUTSIDE_MEDIA_ROOTS", DisplayPath(filepath.Join(other, "clip.mp4"))+" is outside the folders Rustle may read: "+DisplayPath(dir)+".", "")
 		_, err = Identify(filepath.Join(dir, "clip.mp4"), settings(t))
-		wantError(t, err, "LOCAL_FILES_DISABLED", "Local files are disabled on this server (RUSTLE_MEDIA_ROOTS is empty).", "")
+		wantError(t, err, "LOCAL_FILES_DISABLED", "Local files are disabled on this server.", "")
 	})
 
 	t.Run("folders, missing files and empty sources are refused", func(t *testing.T) {
