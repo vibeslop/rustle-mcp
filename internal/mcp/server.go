@@ -1,6 +1,6 @@
-// Package mcp serves tools over the Model Context Protocol's stdio transport: JSON-RPC
-// messages, one per line. Rustle only answers: initialize, ping, tools/list and
-// tools/call, with cancellation; it never sends requests of its own.
+// Package mcp serves tools over the Model Context Protocol, on stdio (JSON-RPC messages,
+// one per line) or Streamable HTTP (http.go). Rustle only answers: initialize, ping,
+// tools/list and tools/call, with cancellation; it never sends requests of its own.
 package mcp
 
 import (
@@ -43,7 +43,7 @@ type Server struct {
 	// OnError sees protocol errors, which never reach the client.
 	OnError func(error)
 
-	client  atomic.Value // the client's name, from initialize
+	client  atomic.Value // the stdio client's name, from initialize
 	write   sync.Mutex
 	out     *bufio.Writer
 	mu      sync.Mutex
@@ -57,7 +57,10 @@ type message struct {
 	Params  json.RawMessage `json:"params,omitempty"`
 }
 
-// ClientName is the connected client's name, as initialize reported it.
+// notification is true for a message without an id, which wants no reply.
+func (m *message) notification() bool { return len(m.ID) == 0 || string(m.ID) == "null" }
+
+// ClientName is the stdio client's name, as initialize reported it.
 func (s *Server) ClientName() string {
 	name, _ := s.client.Load().(string)
 	return name
@@ -67,7 +70,6 @@ func (s *Server) ClientName() string {
 // those still running when in ends are cancelled.
 func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 	s.out = bufio.NewWriterSize(out, 64<<10)
-	s.running = map[string]context.CancelFunc{}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	reader := bufio.NewReaderSize(in, 64<<10)
@@ -93,120 +95,157 @@ func (s *Server) fail(err error) {
 	}
 }
 
-func (s *Server) handle(ctx context.Context, line []byte) {
-	for len(line) > 0 && (line[len(line)-1] == '\n' || line[len(line)-1] == '\r') {
-		line = line[:len(line)-1]
-	}
+// parse reads one message; ok is false for a blank line, and for an invalid message,
+// which is reported to OnError.
+func (s *Server) parse(line []byte) (m message, ok bool) {
+	line = bytes.TrimRight(line, "\r\n")
 	// Windows PowerShell starts what it pipes to a program with a byte order mark.
 	line = bytes.TrimPrefix(line, []byte("\ufeff"))
 	if len(line) == 0 {
-		return
+		return m, false
 	}
-	var m message
 	if err := json.Unmarshal(line, &m); err != nil {
 		s.fail(fmt.Errorf("invalid message: %w", err))
-		return
+		return m, false
 	}
 	if m.JSONRPC != "2.0" {
 		s.fail(fmt.Errorf("invalid message: jsonrpc must be \"2.0\""))
+		return m, false
+	}
+	return m, true
+}
+
+func (s *Server) handle(ctx context.Context, line []byte) {
+	m, ok := s.parse(line)
+	if !ok {
 		return
 	}
-	if len(m.ID) == 0 || string(m.ID) == "null" {
-		if m.Method == "notifications/cancelled" {
-			var p struct {
-				RequestID json.RawMessage `json:"requestId"`
-			}
-			if json.Unmarshal(m.Params, &p) == nil && len(p.RequestID) > 0 {
-				s.mu.Lock()
-				if cancel := s.running[string(p.RequestID)]; cancel != nil {
-					cancel()
-				}
-				s.mu.Unlock()
-			}
-		}
-		// Other notifications, and replies to requests Rustle never sends, need nothing.
+	if m.notification() {
+		s.notified("", m)
 		return
 	}
 	switch m.Method {
 	case "initialize":
-		var p struct {
-			ProtocolVersion string `json:"protocolVersion"`
-			ClientInfo      struct {
-				Name string `json:"name"`
-			} `json:"clientInfo"`
-		}
-		_ = json.Unmarshal(m.Params, &p)
-		s.client.Store(p.ClientInfo.Name)
-		version := latestProtocol
-		for _, v := range supportedProtocols {
-			if v == p.ProtocolVersion {
-				version = v
+		result, client := s.initialize(m.Params)
+		s.client.Store(client)
+		s.send(reply(m.ID, result))
+	case "tools/call":
+		call, done := s.track(ctx, "", m.ID)
+		go func() {
+			defer done()
+			line := s.call(call, s.ClientName(), m)
+			// A cancelled call gets no answer: the client has stopped waiting for it.
+			if call.Err() == nil {
+				s.send(line)
 			}
+		}()
+	default:
+		s.send(s.answer(m))
+	}
+}
+
+// notified acts on a notification from the client in session: only a cancellation needs anything.
+func (s *Server) notified(session string, m message) {
+	if m.Method != "notifications/cancelled" {
+		return
+	}
+	var p struct {
+		RequestID json.RawMessage `json:"requestId"`
+	}
+	if json.Unmarshal(m.Params, &p) == nil && len(p.RequestID) > 0 {
+		s.mu.Lock()
+		if cancel := s.running[session+" "+string(p.RequestID)]; cancel != nil {
+			cancel()
 		}
-		result := rustle.NewObj().
-			Set("protocolVersion", version).
-			Set("capabilities", rustle.NewObj().Set("tools", rustle.NewObj().Set("listChanged", true))).
-			Set("serverInfo", rustle.NewObj().Set("name", s.Name).Set("version", s.Version)).
-			Set("instructions", s.Instructions)
-		s.reply(m.ID, result)
+		s.mu.Unlock()
+	}
+}
+
+// track makes the context of call id from session, which a cancellation ends; done
+// forgets it. Request ids are only unique within a session.
+func (s *Server) track(ctx context.Context, session string, id json.RawMessage) (context.Context, func()) {
+	call, cancel := context.WithCancel(ctx)
+	key := session + " " + string(id)
+	s.mu.Lock()
+	if s.running == nil {
+		s.running = map[string]context.CancelFunc{}
+	}
+	s.running[key] = cancel
+	s.mu.Unlock()
+	return call, func() {
+		s.mu.Lock()
+		delete(s.running, key)
+		s.mu.Unlock()
+		cancel()
+	}
+}
+
+// initialize is the reply to initialize, and the client's name.
+func (s *Server) initialize(params json.RawMessage) (*rustle.Obj, string) {
+	var p struct {
+		ProtocolVersion string `json:"protocolVersion"`
+		ClientInfo      struct {
+			Name string `json:"name"`
+		} `json:"clientInfo"`
+	}
+	_ = json.Unmarshal(params, &p)
+	version := latestProtocol
+	for _, v := range supportedProtocols {
+		if v == p.ProtocolVersion {
+			version = v
+		}
+	}
+	return rustle.NewObj().
+		Set("protocolVersion", version).
+		Set("capabilities", rustle.NewObj().Set("tools", rustle.NewObj().Set("listChanged", true))).
+		Set("serverInfo", rustle.NewObj().Set("name", s.Name).Set("version", s.Version)).
+		Set("instructions", s.Instructions), p.ClientInfo.Name
+}
+
+// answer is the reply to a request other than initialize and tools/call.
+func (s *Server) answer(m message) []byte {
+	switch m.Method {
 	case "ping":
-		s.reply(m.ID, rustle.NewObj())
+		return reply(m.ID, rustle.NewObj())
 	case "tools/list":
 		tools := make([]any, len(s.Tools))
 		for i, t := range s.Tools {
 			tools[i] = rustle.NewObj().Set("name", t.Name).Set("description", t.Description).Set("inputSchema", t.Schema).
 				Set("annotations", rustle.NewObj().Set("readOnlyHint", true))
 		}
-		s.reply(m.ID, rustle.NewObj().Set("tools", tools))
-	case "tools/call":
-		var p struct {
-			Name      string          `json:"name"`
-			Arguments json.RawMessage `json:"arguments"`
-		}
-		if len(m.Params) == 0 || m.Params[0] != '{' || json.Unmarshal(m.Params, &p) != nil {
-			s.error(m.ID, -32602, "Invalid tools/call request: params must be an object")
-			return
-		}
-		var tool *Tool
-		for i := range s.Tools {
-			if s.Tools[i].Name == p.Name {
-				tool = &s.Tools[i]
-			}
-		}
-		if tool == nil {
-			s.error(m.ID, -32602, fmt.Sprintf("Tool %s not found", p.Name))
-			return
-		}
-		args := map[string]any{}
-		if len(p.Arguments) > 0 && p.Arguments[0] == '{' {
-			_ = json.Unmarshal(p.Arguments, &args)
-		}
-		call, cancel := context.WithCancel(ctx)
-		key := string(m.ID)
-		s.mu.Lock()
-		s.running[key] = cancel
-		s.mu.Unlock()
-		go func() {
-			defer func() {
-				s.mu.Lock()
-				delete(s.running, key)
-				s.mu.Unlock()
-				cancel()
-			}()
-			result := tool.Call(call, s.ClientName(), args)
-			// A cancelled call gets no answer: the client has stopped waiting for it.
-			if call.Err() != nil {
-				return
-			}
-			out := rustle.NewObj().Set("content", blocks(result.Content))
-			if result.IsError {
-				out.Set("isError", true)
-			}
-			s.reply(m.ID, out)
-		}()
-	default:
-		s.error(m.ID, -32601, "Method not found")
+		return reply(m.ID, rustle.NewObj().Set("tools", tools))
 	}
+	return errorReply(m.ID, -32601, "Method not found")
+}
+
+// call runs a tools/call request for the named client, and is its reply.
+func (s *Server) call(ctx context.Context, client string, m message) []byte {
+	var p struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if len(m.Params) == 0 || m.Params[0] != '{' || json.Unmarshal(m.Params, &p) != nil {
+		return errorReply(m.ID, -32602, "Invalid tools/call request: params must be an object")
+	}
+	var tool *Tool
+	for i := range s.Tools {
+		if s.Tools[i].Name == p.Name {
+			tool = &s.Tools[i]
+		}
+	}
+	if tool == nil {
+		return errorReply(m.ID, -32602, fmt.Sprintf("Tool %s not found", p.Name))
+	}
+	args := map[string]any{}
+	if len(p.Arguments) > 0 && p.Arguments[0] == '{' {
+		_ = json.Unmarshal(p.Arguments, &args)
+	}
+	result := tool.Call(ctx, client, args)
+	out := rustle.NewObj().Set("content", blocks(result.Content))
+	if result.IsError {
+		out.Set("isError", true)
+	}
+	return reply(m.ID, out)
 }
 
 // blocks keeps content blocks as they are: an image's base64 is not metadata to round.
@@ -224,20 +263,23 @@ func (b blocks) MarshalJSON() ([]byte, error) {
 	return append(out, ']'), nil
 }
 
-func (s *Server) reply(id json.RawMessage, result *rustle.Obj) {
+func reply(id json.RawMessage, result *rustle.Obj) []byte {
 	line := []byte(`{"result":`)
 	line = rustle.AppendCompact(line, result)
 	line = append(line, `,"jsonrpc":"2.0","id":`...)
 	line = append(line, id...)
-	s.send(append(line, '}'))
+	return append(line, '}')
 }
 
-func (s *Server) error(id json.RawMessage, code int, message string) {
+func errorReply(id json.RawMessage, code int, message string) []byte {
 	line := []byte(`{"jsonrpc":"2.0","id":`)
+	if len(id) == 0 {
+		id = json.RawMessage("null")
+	}
 	line = append(line, id...)
 	line = append(line, fmt.Sprintf(`,"error":{"code":%d,"message":`, code)...)
 	line = rustle.AppendString(line, message)
-	s.send(append(line, "}}"...))
+	return append(line, "}}"...)
 }
 
 func (s *Server) send(line []byte) {
