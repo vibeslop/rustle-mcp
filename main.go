@@ -46,6 +46,8 @@ func versionString() string {
 const help = `rustle-mcp %s: MCP server that lets AI agents read videos.
 
   rustle-mcp                     serve MCP over stdio
+  rustle-mcp deploy              put Rustle on Vercel for agents that can't start a local
+                                 program, such as claude.ai, and print its address
   rustle-mcp http                serve MCP over HTTP on $PORT (default 8080), for hosting;
                                  requests carry RUSTLE_TOKEN, as /mcp/<token> or a bearer token
   rustle-mcp warp                register a free Cloudflare WARP device and print its
@@ -65,6 +67,9 @@ func main() {
 	}
 	if len(args) > 0 && args[0] == "warp" {
 		os.Exit(warp())
+	}
+	if len(args) > 0 && args[0] == "deploy" {
+		os.Exit(deploy(args[1:]))
 	}
 	if slices.Contains(args, "--version") {
 		fmt.Println(versionString())

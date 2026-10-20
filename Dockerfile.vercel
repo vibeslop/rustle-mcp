@@ -1,0 +1,17 @@
+# Rustle on Vercel's container runtime (Beta): the image of Dockerfile, listening on port
+# 80, where Vercel sends traffic unless the project sets PORT. Vercel keeps 500 MB of /tmp
+# and stops an instance after 5 idle minutes.
+FROM golang:1-alpine AS build
+WORKDIR /src
+RUN CGO_ENABLED=0 GOBIN=/out go install -trimpath -ldflags "-s -w" github.com/windtf/wireproxy/cmd/wireproxy@v1.1.3
+COPY . .
+# From a checkout this builds it. rustle-mcp deploy sends only this file and vercel.json,
+# so the latest release is built instead.
+RUN if [ -f go.mod ]; then CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/rustle-mcp .; \
+    else CGO_ENABLED=0 GOBIN=/out go install -trimpath -ldflags "-s -w" github.com/vibeslop/rustle-mcp@latest; fi
+
+FROM alpine:3.24
+RUN apk add --no-cache ffmpeg
+COPY --from=build /out/ /usr/local/bin/
+ENV PORT=80 RUSTLE_CACHE=/tmp/rustle-mcp RUSTLE_CACHE_MB=256 RUSTLE_WORKERS=2
+CMD ["rustle-mcp", "http"]

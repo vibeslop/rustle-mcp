@@ -1,0 +1,7 @@
+.git
+/rustle-mcp
+/rustle-mcp.exe
+/dist/
+/test/
+.env*
+.vercel
