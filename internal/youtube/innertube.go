@@ -57,6 +57,10 @@ func changed(what string) *rustle.Error {
 		"Update rustle-mcp; until then use a direct media URL or a local file.")
 }
 
+// blocked is the recovery when YouTube refuses every route the server has. A hosted
+// server's WARP tunnel can be refused too, and a proxy is the route left to add.
+const blocked = "Retry in a few minutes. On a hosted server, a residential proxy set as HTTPS_PROXY gives Rustle another route to YouTube. A direct media URL or local file avoids YouTube."
+
 // HTTPError maps an HTTP status from YouTube to an error an agent can act on.
 func HTTPError(status int) *rustle.Error {
 	switch status {
@@ -65,7 +69,7 @@ func HTTPError(status int) *rustle.Error {
 			"Wait several minutes before retrying; fewer YouTube requests per minute avoid this.").Retry(300)
 	case 401, 403:
 		return rustle.Fail(fmt.Sprintf("YouTube rejected the request (HTTP %d).", status), "YOUTUBE_ACCESS_DENIED",
-			"Retry later or from another network; YouTube often blocks datacenter addresses. A direct media URL or local file avoids YouTube.")
+			blocked)
 	}
 	e := rustle.Fail(fmt.Sprintf("YouTube returned HTTP %d.", status), "UPSTREAM_UNAVAILABLE", "Wait briefly, then retry; verify the video link if it recurs.")
 	e.Retryable = status >= 500
@@ -245,7 +249,7 @@ func PlayabilityError(status, details any) *rustle.Error {
 	switch {
 	case notABot.MatchString(text):
 		return rustle.Fail("YouTube treats this connection as automated and refused playback.", "YOUTUBE_ACCESS_DENIED",
-			"Retry later or from a residential network; YouTube blocks most hosting providers. A direct media URL or local file avoids YouTube.")
+			blocked)
 	case state == "LIVE_STREAM_OFFLINE":
 		return live()
 	case regionText.MatchString(text):
@@ -473,10 +477,30 @@ func player(ctx context.Context, id, client, visitor string) (any, error) {
 	return data, err
 }
 
+// refused is true for an error that means YouTube distrusts the address the request came from.
+func refused(err error) bool { return rustle.HasCode(err, "YOUTUBE_ACCESS_DENIED", "RATE_LIMITED") }
+
+// rerouted runs work, and runs it again through the next route (RUSTLE_PROXIES) each time
+// YouTube refuses the current one. Work starts over on the new route: media links are
+// signed for the address that asked for them.
+func rerouted[T any](work func() (T, error)) (T, error) {
+	for {
+		via := fetch.Route()
+		v, err := work()
+		if err == nil || !refused(err) || !fetch.Refuse(via) {
+			return v, err
+		}
+	}
+}
+
 // Resolve reads a video's title, duration, captions, original language and chapters,
 // without media: one visitor-data fetch (cached for hours) and one player request. The
 // record's YouTube field holds whatever the media and storyboard code needs later.
 func Resolve(c *rustle.Call, id, key string) (*rustle.Record, error) {
+	return rerouted(func() (*rustle.Record, error) { return resolve(c, id, key) })
+}
+
+func resolve(c *rustle.Call, id, key string) (*rustle.Record, error) {
 	visitor, err := VisitorData(c, false)
 	if err != nil {
 		return nil, err
@@ -536,14 +560,17 @@ func CaptionText(c *rustle.Call, record *rustle.Record, track rustle.Caption) (s
 	if cached := c.Cache.Read(record.Key, name); len(cached) > 0 {
 		return string(cached), nil
 	}
-	response, err := fetch.Get(c.Ctx, TimedtextURL(track.URL), fetch.Options{
-		Limit: 8 << 20, Timeout: 20 * time.Second, What: "YouTube", Allow: errorStatuses, Hedge: 300 * time.Millisecond,
+	response, err := rerouted(func() (*fetch.Response, error) {
+		response, err := fetch.Get(c.Ctx, TimedtextURL(track.URL), fetch.Options{
+			Limit: 8 << 20, Timeout: 20 * time.Second, What: "YouTube", Allow: errorStatuses, Hedge: 300 * time.Millisecond,
+		})
+		if err == nil && response.Status >= 400 {
+			err = HTTPError(response.Status)
+		}
+		return response, err
 	})
 	if err != nil {
 		return "", err
-	}
-	if response.Status >= 400 {
-		return "", HTTPError(response.Status)
 	}
 	text := string(response.Body)
 	if rustle.TrimSpace(text) == "" {

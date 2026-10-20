@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/vibeslop/rustle-mcp/internal/rustle"
+
+	"github.com/vibeslop/rustle-mcp/internal/fetch"
 )
 
 func byteSpan(start, end string) M { return M{"start": start, "end": end} }
@@ -410,4 +412,30 @@ func TestCaptionText(t *testing.T) {
 			}
 		}
 	})
+}
+
+// When YouTube refuses the route in use, the request goes out again through the next
+// one in RUSTLE_PROXIES, which later requests keep using.
+func TestResolveMovesToTheNextRoute(t *testing.T) {
+	c := newCall(t)
+	if err := fetch.SetRoutes([]string{"http://127.0.0.1:9", "direct"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fetch.SetRoutes(nil) })
+	serve(t, func(r request) any {
+		if isSwData(r) {
+			return swData()
+		}
+		if fetch.Route() == 0 {
+			return playerResponse(playerOptions{status: "LOGIN_REQUIRED", reason: botCheck})
+		}
+		return playerResponse(playerOptions{})
+	})
+	record, err := Resolve(c, "jNQXAC9IVRw", "k9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.YouTube == nil || fetch.Route() != 1 {
+		t.Errorf("route %d after the first was refused", fetch.Route())
+	}
 }

@@ -83,7 +83,7 @@ func Media(c *rustle.Call, record *rustle.Record, track string, start, end float
 	return rustle.Detach(c.Ctx, func(ctx context.Context) (*Window, error) {
 		shared := *c
 		shared.Ctx = ctx
-		return fetchWindow(&shared, record, track, start, end, dir)
+		return rerouted(func() (*Window, error) { return fetchWindow(&shared, record, track, start, end, dir) })
 	})
 }
 
