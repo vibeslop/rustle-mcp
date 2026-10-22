@@ -10,7 +10,7 @@ For anything beyond a small fix, open an issue first and describe what you want 
 
 ## Making a change
 
-You need Go 1.24 or newer, and ffmpeg 7 or newer for the frame and sound tests.
+You need Go 1.27.3 or newer (an older `go` downloads it for you), and ffmpeg 7 or newer for the frame and sound tests.
 
 ```sh
 go build -o rustle-mcp .
