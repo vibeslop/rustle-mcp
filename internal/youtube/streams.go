@@ -141,14 +141,21 @@ func codecRank(codecs string) int {
 	return 2
 }
 
+// sheetSide is the short side of the format contact sheets are decoded from. A cell is
+// 159 px tall, so 480p still holds three times its detail; decoding two minutes for a
+// frame a second took 0.5 s at 480p against 1.75 s at 1080p, from 18 MB of download
+// against 75.
+const sheetSide = 480
+
 // ChooseFormat picks the format to read a track from. Video: the sharpest format whose
 // short side is at most 1080 px (frames are fitted to 2000 px, so more is waste), in a
 // codec ffmpeg decodes quickly, and of those the fewest bytes, since the download dominates
-// a cold frame (VP9 is often half of H.264). AV1 only when nothing else exists. Audio: the
-// original track at its best Opus or AAC bitrate, never an auto-dub or the
+// a cold frame (VP9 is often half of H.264). AV1 only when nothing else exists. Sheet: of
+// those codecs, the smallest format of at least sheetSide, else what video would pick.
+// Audio: the original track at its best Opus or AAC bitrate, never an auto-dub or the
 // loudness-normalized (DRC) copy.
 func ChooseFormat(formats []Format, track string) *Format {
-	if track == "video" {
+	if track == "video" || track == "sheet" {
 		var video []Format
 		fast := false
 		for _, f := range formats {
@@ -167,6 +174,27 @@ func ChooseFormat(formats []Format, track string) *Format {
 			video = kept
 		}
 		side := func(f Format) int { return min(f.Width, f.Height) }
+		if track == "sheet" {
+			var small []Format
+			for _, f := range video {
+				if side(f) >= sheetSide {
+					small = append(small, f)
+				}
+			}
+			if len(small) > 0 {
+				sort.SliceStable(small, func(i, j int) bool {
+					a, b := small[i], small[j]
+					if side(a) != side(b) {
+						return side(a) < side(b)
+					}
+					if codecRank(a.Codecs) != codecRank(b.Codecs) {
+						return codecRank(a.Codecs) < codecRank(b.Codecs)
+					}
+					return a.Bitrate < b.Bitrate
+				})
+				return &small[0]
+			}
+		}
 		var fitting []Format
 		for _, f := range video {
 			if side(f) <= 1080 {

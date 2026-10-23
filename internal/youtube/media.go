@@ -254,8 +254,10 @@ func streamsOf(record *rustle.Record) *Streams {
 	}
 	all := ParseFormats(yt.Formats)
 	var formats []Format
-	for _, track := range []string{"video", "audio"} {
-		if f := ChooseFormat(all, track); f != nil {
+	seen := map[int]bool{}
+	for _, track := range []string{"video", "sheet", "audio"} {
+		if f := ChooseFormat(all, track); f != nil && !seen[f.Itag] {
+			seen[f.Itag] = true
 			formats = append(formats, *f)
 		}
 	}

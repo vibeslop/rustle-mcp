@@ -73,6 +73,23 @@ func TestFormatChoice(t *testing.T) {
 		}
 	})
 
+	t.Run("sheet choice: the smallest fast format of at least 480p, else the video choice", func(t *testing.T) {
+		formats := formatsOf(t,
+			adaptive(248, `video/webm; codecs="vp9"`, M{"width": 1920, "height": 1080, "bitrate": 2e6}),
+			adaptive(244, `video/webm; codecs="vp9"`, M{"width": 854, "height": 480, "bitrate": 5e5}),
+			adaptive(135, `video/mp4; codecs="avc1.4d401f"`, M{"width": 854, "height": 480, "bitrate": 9e5}),
+			adaptive(134, `video/mp4; codecs="avc1.4d401e"`, M{"width": 640, "height": 360, "bitrate": 3e5}),
+			adaptive(397, `video/mp4; codecs="av01.0.04M.08"`, M{"width": 854, "height": 480, "bitrate": 2e5}),
+		)
+		if itag := chosenItag(formats, "sheet"); itag != 244 {
+			t.Errorf("chose %d, want 244", itag)
+		}
+		small := formatsOf(t, adaptive(134, `video/mp4; codecs="avc1.4d401e"`, M{"width": 640, "height": 360}))
+		if itag := chosenItag(small, "sheet"); itag != 134 {
+			t.Errorf("with only 360p chose %d, want 134", itag)
+		}
+	})
+
 	t.Run("audio choice: the original track, Opus before AAC, never DRC or auto-dubs", func(t *testing.T) {
 		original := M{"audioTrack": M{"id": "en-US.4", "audioIsDefault": true}}
 		dub := M{"audioTrack": M{"id": "de-DE.10", "audioIsDefault": false, "isAutoDubbed": true}}
