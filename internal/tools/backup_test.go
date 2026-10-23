@@ -17,7 +17,7 @@ import (
 func TestRefusedCallsGoToTheBackup(t *testing.T) {
 	var client string
 	var forwarded bool
-	backup := httptest.NewServer((&mcp.Server{Tools: []mcp.Tool{{Name: "read_transcript", Call: func(ctx context.Context, name string, args map[string]any) mcp.Result {
+	backup := httptest.NewServer((&mcp.Server{Tools: []mcp.Tool{{Name: "watch_video", Call: func(ctx context.Context, name string, args map[string]any) mcp.Result {
 		client, forwarded = name, mcp.Forwarded(ctx)
 		if args["source"] == "captionless" {
 			return mcp.Result{IsError: true, Content: []rustle.Block{rustle.TextBlock(`{"error":"No captions for this video.","code":"NO_CAPTIONS"}`)}}
@@ -29,12 +29,12 @@ func TestRefusedCallsGoToTheBackup(t *testing.T) {
 	settings := testSettings(t).Copy()
 	settings.Backup = backup.URL + "/mcp/t"
 	code := "YOUTUBE_ACCESS_DENIED"
-	refused := func(*rustle.Call, TranscriptArgs) (*rustle.Result, error) {
+	refused := func(*rustle.Call, WatchArgs) (*rustle.Result, error) {
 		return nil, rustle.Fail("YouTube refused.", code, "")
 	}
 	transcript := func() mcp.Tool {
-		for _, tool := range NewServer(settings, Ops{Transcript: refused}).Tools() {
-			if tool.Name == "read_transcript" {
+		for _, tool := range NewServer(settings, Ops{Watch: refused}).Tools() {
+			if tool.Name == "watch_video" {
 				return tool
 			}
 		}
@@ -74,12 +74,12 @@ func TestForwardedCallsStay(t *testing.T) {
 	defer backup.Close()
 	settings := testSettings(t).Copy()
 	settings.Backup = backup.URL
-	refused := func(*rustle.Call, TranscriptArgs) (*rustle.Result, error) {
+	refused := func(*rustle.Call, WatchArgs) (*rustle.Result, error) {
 		return nil, rustle.Fail("YouTube refused.", "YOUTUBE_ACCESS_DENIED", "")
 	}
-	server := httptest.NewServer((&mcp.Server{Tools: NewServer(settings, Ops{Transcript: refused}).Tools()}).Handler("t"))
+	server := httptest.NewServer((&mcp.Server{Tools: NewServer(settings, Ops{Watch: refused}).Tools()}).Handler("t"))
 	defer server.Close()
-	req, _ := http.NewRequest(http.MethodPost, server.URL+"/mcp/t", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_transcript","arguments":{"source":"x"}}}`))
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/mcp/t", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"watch_video","arguments":{"source":"x"}}}`))
 	req.Header.Set(mcp.ForwardedHeader, "1")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

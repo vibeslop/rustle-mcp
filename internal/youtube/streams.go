@@ -50,7 +50,7 @@ type Streams struct {
 }
 
 // recovery is the way on that is left when YouTube refuses media.
-const recovery = "read_transcript still works for what is said."
+const recovery = "watch_video with frames=0 still reads what is said."
 
 func accessDenied(detail string) *rustle.Error {
 	return rustle.Fail("YouTube refused the video streams: "+detail, "YOUTUBE_ACCESS_DENIED",

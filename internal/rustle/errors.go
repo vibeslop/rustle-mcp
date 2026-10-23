@@ -74,14 +74,14 @@ func NoVideoTrack(title string) *Error {
 		title = "This source"
 	}
 	return Fail(title+" is audio only, so there are no frames to show.", "NO_VIDEO_TRACK",
-		"Use listen_video for its sound or read_transcript for its speech.")
+		"Call watch_video with listen for its sound, or with frames=0 for its speech.")
 }
 
 func NoAudioTrack(title string) *Error {
 	if title == "" {
 		title = "This source"
 	}
-	return Fail(title+" has no audio track.", "NO_AUDIO_TRACK", "Use watch_video or inspect_frame for what is shown.")
+	return Fail(title+" has no audio track.", "NO_AUDIO_TRACK", "Call watch_video without listen for what is shown.")
 }
 
 func Cancelled() *Error {

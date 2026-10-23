@@ -34,14 +34,20 @@ type check struct {
 }
 
 var checks = []check{
-	{"read_transcript", map[string]any{"source": video}, func(text string, _ int) bool {
-		return regexp.MustCompile(`(?i)elephants`).MatchString(text)
+	{"watch_video", map[string]any{"source": video, "frames": 0}, func(text string, images int) bool {
+		return images == 0 && regexp.MustCompile(`(?i)elephants`).MatchString(text)
 	}},
+	// By default, a frame a second from YouTube's smaller format: two sheets for 19 s, then
+	// every word under the frames' labels.
+	{"watch_video", map[string]any{"source": video}, func(text string, images int) bool {
+		return images == 2 && regexp.MustCompile(`(?m)^#\d+ 0:\d\d\.\d\d$`).MatchString(text) && regexp.MustCompile(`(?i)elephants`).MatchString(text)
+	}},
+	// An overview: frames spread across the video.
 	{"watch_video", map[string]any{"source": video, "frames": 4}, func(_ string, images int) bool { return images == 1 }},
 	{"inspect_frame", map[string]any{"source": video, "at_seconds": 5, "crop": []float64{0.25, 0.25, 0.5, 0.5}}, func(text string, images int) bool {
 		return images == 1 && strings.Contains(text, `"at"`)
 	}},
-	{"listen_video", map[string]any{"source": video, "seconds": 5, "output": "analysis"}, func(text string, images int) bool {
+	{"watch_video", map[string]any{"source": video, "end_seconds": 5, "frames": 0, "listen": "analysis"}, func(text string, images int) bool {
 		return images == 1 && strings.Contains(text, "rms_dbfs")
 	}},
 	// Results depend on the address asking; through a VPN the video can rank below fifth.

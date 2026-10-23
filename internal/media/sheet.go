@@ -11,9 +11,10 @@ import (
 	"github.com/vibeslop/rustle-mcp/internal/rustle"
 )
 
-// Contact sheets: frames laid out left to right, then top to bottom, each labelled in its
-// top-left corner. Claude bills one token per 28 px patch, so a sheet is sized in patches:
-// cells fill a 1176 px (42 patch) row and the sheet is padded to whole patches.
+// Contact sheets: frames laid out left to right, then top to bottom, each labelled in a
+// strip above it, so no label covers a frame. Claude bills one token per 28 px patch, so a
+// sheet is sized in patches: cells fill a 1176 px (42 patch) row and the sheet is padded
+// to whole patches.
 
 // Frame is a decoded picture: packed RGB24, Width * Height * 3 bytes.
 type Frame struct {
@@ -47,9 +48,55 @@ const gutter = 2
 
 var (
 	background = [3]byte{16, 16, 16}
-	badgeColor = [3]byte{0, 0, 0}
 	ink        = [3]byte{255, 255, 255}
 )
+
+// A label sits in the strip above its frame, 1 px above it and at least 3 px below the
+// row before, so it reads as its own frame's. The strip replaces the gutter between rows.
+const (
+	labelTop    = 3
+	labelBottom = 1
+	labelGap    = 2
+)
+
+// labelScale is the label font's scale in cells `width` px wide: 14 px tall, or 7 px in
+// cells under 180 px (half-size cells of slides, storyboard thumbnails), where a 14 px
+// strip would add a fifth to the sheet.
+func labelScale(width int) int {
+	if width < 180 {
+		return 1
+	}
+	return 2
+}
+
+// Band is the height of a strip holding one line of labels over cells `width` px wide.
+func Band(width int) int { return labelTop + imaging.TextHeight(labelScale(width)) + labelBottom }
+
+// sheetCost is the patches of a sheet of rows x across cells of w x h under one-line strips.
+func sheetCost(across, rows, w, h int) int {
+	return toPatches(across*w+(across-1)*gutter) * toPatches(rows*(Band(w)+h)) / (rustle.Patch * rustle.Patch)
+}
+
+// fitShrink is how far FitPatches may shrink a cell: twelve 16:9 cells need 3.1% to give
+// back the row of patches their label strips add.
+const fitShrink = 0.96
+
+// FitPatches shrinks a cell, keeping its shape, when that ends a full sheet of `samples`
+// cells on whole patches and so saves a row or column of them. Frames are decoded at the
+// result, so the picture is scaled, never cut.
+func FitPatches(cell [2]int, samples, columns int) [2]int {
+	page := min(samples, SheetCells)
+	across := min(columns, page)
+	rows := ceilDiv(page, across)
+	best, cost := cell, sheetCost(across, rows, cell[0], cell[1])
+	for h := cell[1] - 1; h >= int(math.Ceil(float64(cell[1])*fitShrink)); h-- {
+		w := max(1, int(rustle.Round(float64(cell[0]*h)/float64(cell[1]))))
+		if c := sheetCost(across, rows, w, h); c < cost {
+			best, cost = [2]int{w, h}, c
+		}
+	}
+	return best
+}
 
 // ColumnsFor is one frame for a single sample, two across for up to four, three for six,
 // four beyond.
@@ -561,9 +608,7 @@ func Adapt(cells []Cell, columns int, cell [2]int) ([]Cell, [2]int) {
 	page := min(len(cells), SheetCells)
 	across := min(columns, page)
 	rows := ceilDiv(page, across)
-	cost := func(w, h int) int {
-		return toPatches(across*w+(across-1)*gutter) * toPatches(rows*h+(rows-1)*gutter)
-	}
+	cost := func(w, h int) int { return sheetCost(across, rows, w, h) }
 	full := [2]int{(cw >> 2) * 3, (ch >> 2) * 3}
 	if scale == 0.5 {
 		full = [2]int{cw >> 1, ch >> 1}
@@ -588,26 +633,38 @@ type Sheet struct {
 
 func toPatches(pixels int) int { return ceilDiv(pixels, rustle.Patch) * rustle.Patch }
 
-// badge draws a label on a dark badge in the cell's top-left corner. The bottom edge would
-// cover subtitles and lower thirds, which stay legible in a cell. Scale 2 unless the label
-// would take more than four fifths of the cell's width.
-func badge(sheet *Sheet, x, y, cellWidth, cellHeight int, text string) {
-	scale := 2
-	if float64(imaging.TextWidth(text, scale)+2*(scale+1)) > float64(cellWidth)*0.8 {
-		scale = 1
+// label is a cell's label laid out for a strip: its lines and their scale.
+type label struct {
+	lines []string
+	scale int
+}
+
+// layoutLabel fits a label to `width` in a cell `cell` px wide: whole, else wrapped, else
+// wrapped at scale 1, so it never runs into the next cell's.
+func layoutLabel(text string, width, cell int) label {
+	for _, scale := range []int{labelScale(cell), 1} {
+		lines := Wrap(text, width, scale)
+		fits := true
+		for _, l := range lines {
+			fits = fits && imaging.TextWidth(l, scale) <= width
+		}
+		if fits {
+			return label{lines, scale}
+		}
 	}
-	pad := scale + 1
-	lines := Wrap(text, cellWidth-2*pad, scale)
-	line := imaging.TextHeight(scale) + pad
-	widest := 0
-	for _, l := range lines {
-		widest = max(widest, imaging.TextWidth(l, scale))
-	}
-	w := min(cellWidth, widest+2*pad)
-	h := min(cellHeight, len(lines)*line+pad)
-	imaging.FillRect(sheet.RGB, sheet.Width, sheet.Height, x, y, w, h, badgeColor)
-	for i, l := range lines {
-		imaging.DrawText(sheet.RGB, sheet.Width, sheet.Height, x+pad, y+pad+i*line, l, scale, ink)
+	return label{Wrap(text, width, 1), 1}
+}
+
+func (l label) height() int {
+	return len(l.lines)*imaging.TextHeight(l.scale) + (len(l.lines)-1)*labelGap
+}
+
+// draw puts the label's last line 1 px above a frame whose top-left corner is (x, top).
+func (l label) draw(sheet *Sheet, x, top int) {
+	y := top - labelBottom - l.height()
+	for _, line := range l.lines {
+		imaging.DrawText(sheet.RGB, sheet.Width, sheet.Height, x, y, line, l.scale, ink)
+		y += imaging.TextHeight(l.scale) + labelGap
 	}
 }
 
@@ -653,8 +710,8 @@ func wrapPieces(text string) []string {
 }
 
 // Compose packs cells into sheets of up to twelve, `columns` across (fewer when a sheet
-// holds fewer cells). Every cell is `cell` pixels; a smaller frame is centred in it, a
-// larger one cropped around its centre.
+// holds fewer cells), each row under a strip for its labels. Every cell is `cell` pixels;
+// a smaller frame is centred in it, a larger one cropped around its centre.
 func Compose(cells []Cell, columns int, cell [2]int) []*Sheet {
 	cw, ch := cell[0], cell[1]
 	var sheets []*Sheet
@@ -662,13 +719,20 @@ func Compose(cells []Cell, columns int, cell [2]int) []*Sheet {
 		page := cells[begin:min(len(cells), begin+SheetCells)]
 		across := min(columns, len(page))
 		rows := ceilDiv(len(page), across)
+		labels := make([]label, len(page))
+		band := 0
+		for j, item := range page {
+			// A label starts at its frame's left edge and may use the rest of the cell.
+			labels[j] = layoutLabel(Label(item), cw-((cw-min(item.Frame.Width, cw))>>1), cw)
+			band = max(band, labelTop+labels[j].height()+labelBottom)
+		}
 		width := toPatches(across*cw + (across-1)*gutter)
-		height := toPatches(rows*ch + (rows-1)*gutter)
+		height := toPatches(rows * (band + ch))
 		sheet := &Sheet{RGB: make([]byte, width*height*3), Width: width, Height: height}
 		imaging.FillRect(sheet.RGB, width, height, 0, 0, width, height, background)
 		for j, item := range page {
 			x := (j % across) * (cw + gutter)
-			y := (j / across) * (ch + gutter)
+			y := (j/across)*(band+ch) + band
 			frame := item.Frame
 			fw, fh := min(frame.Width, cw), min(frame.Height, ch)
 			ox, oy := x+((cw-fw)>>1), y+((ch-fh)>>1)
@@ -678,7 +742,7 @@ func Compose(cells []Cell, columns int, cell [2]int) []*Sheet {
 				from := ((sy+row)*frame.Width + sx) * 3
 				copy(sheet.RGB[((oy+row)*width+ox)*3:], frame.RGB[from:from+fw*3])
 			}
-			badge(sheet, ox, oy, fw, fh, Label(item))
+			labels[j].draw(sheet, ox, oy)
 			sheet.Flat += flatness(frame) / float64(len(page))
 		}
 		sheets = append(sheets, sheet)

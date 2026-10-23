@@ -65,7 +65,7 @@ func ToolsFor(s *rustle.Settings) (Tools, error) {
 	}
 	if located.tools == nil {
 		return Tools{}, rustle.Fail("Frames and sound need ffmpeg, which is not installed.", "FFMPEG_MISSING",
-			"Ask the user to install ffmpeg (macOS: brew install ffmpeg; Debian/Ubuntu: sudo apt install ffmpeg; Windows: winget install ffmpeg) and restart the MCP server, or set RUSTLE_FFMPEG to its path. read_transcript and find_videos work without it.")
+			"Ask the user to install ffmpeg (macOS: brew install ffmpeg; Debian/Ubuntu: sudo apt install ffmpeg; Windows: winget install ffmpeg) and restart the MCP server, or set RUSTLE_FFMPEG to its path. watch_video reads speech without it (frames=0), and find_videos works.")
 	}
 	return *located.tools, nil
 }

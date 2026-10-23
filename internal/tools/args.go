@@ -18,28 +18,40 @@ type FindArgs struct {
 	Limit   int    `json:"limit"`
 }
 
-type TranscriptArgs struct {
-	Source string   `json:"source"`
-	Start  float64  `json:"start"`
-	End    *float64 `json:"end"`
-	Query  string   `json:"query"`
-	// Language "auto" picks the spoken language.
-	Language   string `json:"language"`
-	Transcribe bool   `json:"transcribe"`
-	// Detail is "digest", the whole video's key sentences, or "full", every word.
-	Detail string `json:"detail"`
-}
-
+// WatchArgs ask for what is shown, said and heard in a span.
 type WatchArgs struct {
 	Source string   `json:"source"`
 	Start  float64  `json:"start"`
 	End    *float64 `json:"end"`
-	Frames int      `json:"frames"`
+	// Frames is 0 for no pictures.
+	Frames int `json:"frames"`
 	// FPS samples consecutive frames at this rate from Start, for motion; 0 is off.
-	FPS          float64 `json:"fps"`
-	IncludeAudio bool    `json:"includeAudio"`
+	FPS float64 `json:"fps"`
 	// Crop is [x, y, width, height] as fractions of the frame, already clipped to it.
 	Crop *[4]float64 `json:"crop"`
+	// Detail is "digest", the key sentences, "full", every word, or "none".
+	Detail string `json:"detail"`
+	// Query keeps only speech that mentions it, and puts the frames there.
+	Query string `json:"query"`
+	// Language "auto" picks the spoken language.
+	Language   string `json:"language"`
+	Transcribe bool   `json:"transcribe"`
+	// Listen is "audio", "analysis", or "" for no sound.
+	Listen string `json:"listen"`
+}
+
+// TranscriptArgs and ListenArgs are the speech and sound parts of a watch.
+
+type TranscriptArgs struct {
+	Source     string   `json:"source"`
+	Start      float64  `json:"start"`
+	End        *float64 `json:"end"`
+	Query      string   `json:"query"`
+	Language   string   `json:"language"`
+	Transcribe bool     `json:"transcribe"`
+	Detail     string   `json:"detail"`
+	// Breaks are the times of the frames shown with the speech: no line spans one.
+	Breaks []float64 `json:"breaks"`
 }
 
 type FrameArgs struct {
@@ -59,6 +71,15 @@ type ListenArgs struct {
 	// Output is "audio" or "analysis".
 	Output string `json:"output"`
 }
+
+// MaxFrames is the most frames one call takes: two minutes at a frame a second, ten
+// sheets. The Claude API refuses a conversation of more than 100 images, so a call can't
+// be much larger, and a video longer than ten minutes is better watched in parts.
+const MaxFrames = 120
+
+// ListenSeconds is the most sound one result carries: a minute of FLAC fills most of an
+// audio block (AudioBlockBytes).
+const ListenSeconds = 60
 
 // Args reads a call's raw arguments leniently. Agents echo values from earlier output,
 // send null for optional arguments and overshoot ranges, and a rejected call costs a whole

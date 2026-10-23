@@ -329,7 +329,7 @@ func checkHosted(address string) error {
 		return err
 	}
 	// "Me at the zoo": the first YouTube video, unchanged since 2005.
-	reply, err := call(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"read_transcript","arguments":{"source":"jNQXAC9IVRw"}}}`)
+	reply, err := call(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"watch_video","arguments":{"source":"jNQXAC9IVRw","frames":0}}}`)
 	if err != nil {
 		return err
 	}

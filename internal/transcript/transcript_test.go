@@ -302,23 +302,40 @@ func TestSidecars(t *testing.T) {
 	equal(t, path, "")
 }
 
+// search is Matches as the text a reading shows.
+func search(units []Paragraph, query string, budget int) (string, int, []string) {
+	found, count, notes := Matches(units, query, budget)
+	if count == 0 {
+		return NoMatch(query), 0, notes
+	}
+	lines := make([]string, len(found))
+	for i, m := range found {
+		lines[i] = m.Text
+	}
+	return strings.Join(lines, "\n"), count, notes
+}
+
 func TestSearch(t *testing.T) {
 	sentences := Paragraphs(cuesOf(lecture), 0, 12)
 	introduce := "13:22 My own aunt waxed her desk in one day. So now I'll introduce a better option. Hardwax oil soaks deep into the wood like oil, then sets hard as wax."
 
 	t.Run("matching sentences come with one sentence of context", func(t *testing.T) {
-		text, count, notes := Search(sentences, "introduce", 45000)
+		text, count, notes := search(sentences, "introduce", 45000)
 		equal(t, []any{text, count, len(notes)}, []any{introduce, 1, 0})
+		// Frames go to the match, a sentence after the context the line starts with.
+		if found, _, _ := Matches(sentences, "introduce", 45000); found[0].At <= found[0].Start {
+			t.Errorf("match at %v, its line at %v", found[0].At, found[0].Start)
+		}
 		// Case-insensitive alternatives; each match keeps its neighbouring sentences.
-		text, count, _ = Search(sentences, "  INTRODUCE | Drawers ", 45000)
+		text, count, _ = search(sentences, "  INTRODUCE | Drawers ", 45000)
 		equal(t, count, 2)
 		equal(t, strings.Split(text, "\n"), []string{introduce, "13:44 On that table, the hardwax oil really proved itself over a long winter. Let's open up the drawers, where the older repairs hide, and honestly, uh, I would call a few of them rather creative. The worst of all is this bent nail."})
 	})
 
 	t.Run("nothing found names the query as JSON", func(t *testing.T) {
-		text, count, _ := Search(sentences, " kubernetes ", 45000)
+		text, count, _ := search(sentences, " kubernetes ", 45000)
 		equal(t, []any{text, count}, []any{`Nothing said mentions "kubernetes".`, 0})
-		text, _, _ = Search(sentences, `say "hi" \ <now>`, 45000)
+		text, _, _ = search(sentences, `say "hi" \ <now>`, 45000)
 		equal(t, text, `Nothing said mentions "say \"hi\" \\ <now>".`)
 	})
 
@@ -330,14 +347,14 @@ func TestSearch(t *testing.T) {
 				rows = append(rows, row{r.start + float64(61*copy), r.dur, r.text})
 			}
 		}
-		text, count, notes := Search(Paragraphs(cuesOf(rows), 0, 12), "example.com", 45000)
+		text, count, notes := search(Paragraphs(cuesOf(rows), 0, 12), "example.com", 45000)
 		equal(t, count, 40)
 		equal(t, notes, []string{"showing the first 30 of 40 matches; narrow the query or pass start_seconds"})
 		equal(t, strings.Count(text, "example.com"), 30)
 	})
 
 	t.Run("a small budget stops after the first line", func(t *testing.T) {
-		text, count, notes := Search(sentences, "the", 300)
+		text, count, notes := search(sentences, "the", 300)
 		if lines := strings.Split(text, "\n"); count < 2 || len(lines) != 1 || !lineStart.MatchString(lines[0]) {
 			t.Errorf("%d matches, lines %q", count, lines)
 		}

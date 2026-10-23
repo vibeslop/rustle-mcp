@@ -2,6 +2,7 @@ package tools_test
 
 import (
 	"math"
+	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -126,9 +127,10 @@ func TestWatchVideo(t *testing.T) {
 			t.Fatalf("%d blocks, want 1", len(result.Content))
 		}
 		sheet := pixels(t, result.Content[0])
-		// Three flat cells of 146 x 82, half of 292 x 164: the fixture has no fine detail.
-		if sheet.width != 448 || sheet.height != 84 {
-			t.Errorf("sheet %dx%d, want 448x84", sheet.width, sheet.height)
+		// Three flat cells of 138 x 79, half of 283 x 159 trimmed to whole patches: the
+		// fixture has no fine detail. Their labels, 7 px tall, sit in an 11 px strip.
+		if sheet.width != 420 || sheet.height != 112 {
+			t.Errorf("sheet %dx%d, want 420x112", sheet.width, sheet.height)
 		}
 		if got := magentaByThird(sheet); got != [3]bool{false, true, false} {
 			t.Errorf("magenta by third %v", got)
@@ -184,8 +186,8 @@ func TestWatchVideo(t *testing.T) {
 		if got := media.CropCellSize(12, [2]int{1280, 720}, 128, 36); got != [2]int{292, 82} {
 			t.Errorf("crop cell %v, want [292 82]", got)
 		}
-		if sheet := pixels(t, result.Content[0]); sheet.width != 308 || sheet.height != 84 {
-			t.Errorf("sheet %dx%d, want 308x84", sheet.width, sheet.height)
+		if sheet := pixels(t, result.Content[0]); sheet.width != 308 || sheet.height != 112 {
+			t.Errorf("sheet %dx%d, want 308x112", sheet.width, sheet.height)
 		}
 		// A sidebar lines up six to a row, a strip across the frame one.
 		hd := [2]int{1920, 1080}
@@ -246,42 +248,153 @@ func TestWatchVideo(t *testing.T) {
 		}
 	})
 
-	t.Run("a detailed 1080p overview of twelve frames keeps full cells for at most 756 tokens", func(t *testing.T) {
+	t.Run("a detailed 1080p overview of twelve frames keeps near-full cells for at most 779 tokens", func(t *testing.T) {
 		// Grain makes the test pattern read as camera footage, whose cells never shrink.
 		hd := filepath.Join(fx.dir, "hd.mp4")
 		ffmpeg(t, "-f", "lavfi", "-i", "testsrc2=size=1920x1080:rate=30:duration=6", "-vf", "noise=alls=30:allf=t",
 			"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", hd)
 		result, _ := watch(t, "claude-code", tools.WatchArgs{Source: hd, Frames: 12})
 		sheet := pixels(t, result.Content[0])
-		if tokens := rustle.ImageTokens(sheet.width, sheet.height); tokens > 756 {
+		if tokens := rustle.ImageTokens(sheet.width, sheet.height); tokens > 779 {
 			t.Errorf("%d tokens", tokens)
 		}
-		if sheet.width != 1176 {
-			t.Errorf("sheet %d px wide, want 1176", sheet.width)
+		// 283 px cells, 3% under a full row's 292, end the sheet on 41 patches instead of 42.
+		if sheet.width != 1148 {
+			t.Errorf("sheet %d px wide, want 1148", sheet.width)
 		}
 	})
 
-	t.Run("audio excerpts for clients that hear them; Codex images ask for original detail", func(t *testing.T) {
-		result, _ := watch(t, "codex", tools.WatchArgs{Source: fx.long, Frames: 4, IncludeAudio: true})
+	t.Run("listen adds the span's sound for clients that hear it; Codex images ask for original detail", func(t *testing.T) {
+		result, _ := watch(t, "codex", tools.WatchArgs{Source: fx.long, Frames: 4, Detail: "none", Listen: "audio"})
 		var kinds []string
 		for _, b := range result.Content {
 			kinds = append(kinds, b.Type)
 		}
-		if want := []string{"image", "audio", "audio", "audio"}; !reflect.DeepEqual(kinds, want) {
+		if want := []string{"image", "audio"}; !reflect.DeepEqual(kinds, want) {
 			t.Fatalf("blocks %v, want %v", kinds, want)
 		}
 		if result.Content[1].MimeType != "audio/flac" {
 			t.Errorf("audio as %s", result.Content[1].MimeType)
 		}
-		if audio, _ := result.Meta.Get("audio"); reflect.ValueOf(audio).Len() != 3 {
-			t.Errorf("audio spans %v", audio)
+		sound, _ := result.Meta.Get("sound")
+		if span, _ := sound.(*rustle.Obj).Get("span"); !reflect.DeepEqual(span, []float64{0, 40}) {
+			t.Errorf("sound span %v", span)
 		}
 		if want := map[string]any{"codex/imageDetail": "original"}; !reflect.DeepEqual(result.Content[0].Meta, want) {
 			t.Errorf("image _meta %v", result.Content[0].Meta)
 		}
-		_, silent := watch(t, "claude-code", tools.WatchArgs{Source: inspection, Frames: 2, IncludeAudio: true})
-		if !slices.ContainsFunc(silent.Notes.List(), func(n string) bool { return strings.Contains(n, "no audio track") }) {
+		_, silent := watch(t, "claude-code", tools.WatchArgs{Source: inspection, Frames: 2, Detail: "none", Listen: "analysis"})
+		if !slices.Contains(silent.Notes.List(), "listen ignored: no audio track") {
 			t.Errorf("notes %q", silent.Notes.List())
+		}
+	})
+
+	t.Run("listening caps the span at a minute, and the frames and speech share it", func(t *testing.T) {
+		long := filepath.Join(fx.dir, "minutes.mp4")
+		ffmpeg(t, "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=10:duration=150", "-f", "lavfi", "-i", "sine=frequency=440:duration=150",
+			"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", long)
+		result, c := watch(t, "claude-code", tools.WatchArgs{Source: long, Start: 30, Frames: 4, Detail: "none", Listen: "analysis"})
+		fields(t, result.Meta, map[string]string{"span": "[30,90]", "next_start_seconds": "90"})
+		for _, at := range times(t, result.Meta) {
+			if at < 30 || at >= 90 {
+				t.Errorf("a frame at %v, outside the span", at)
+			}
+		}
+		if kinds := []string{result.Content[0].Type, result.Content[len(result.Content)-1].MimeType}; !reflect.DeepEqual(kinds, []string{"image", "image/png"}) {
+			t.Errorf("blocks %v: want a sheet, then the spectrogram", kinds)
+		}
+		if !slices.ContainsFunc(c.Notes.List(), func(n string) bool { return strings.Contains(n, "at most 60 s") }) {
+			t.Errorf("notes %q", c.Notes.List())
+		}
+	})
+
+	t.Run("each sheet is followed by what is said in its frames, under their labels", func(t *testing.T) {
+		talk := filepath.Join(fx.dir, "talk.mp4")
+		data, err := os.ReadFile(fx.long)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(talk, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		srt := "1\n00:00:01,000 --> 00:00:03,000\nRed comes first.\n\n" +
+			"2\n00:00:16,000 --> 00:00:18,000\nThen green.\n\n" +
+			"3\n00:00:31,000 --> 00:00:33,000\nBlue comes last.\n"
+		if err := os.WriteFile(filepath.Join(fx.dir, "talk.srt"), []byte(srt), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		result, _ := watch(t, "claude-code", tools.WatchArgs{Source: talk, Frames: 4, Detail: "full", Language: "auto"})
+		listed := times(t, result.Meta)
+		if len(result.Content) != 2 || result.Content[0].Type != "image" || result.Content[1].Type != "text" {
+			t.Fatalf("content %+v", result.Content)
+		}
+		label := func(n int) string {
+			return media.Label(media.Cell{First: n, Last: n, From: listed[n-1], To: listed[n-1]})
+		}
+		// Frames at about 0, 13, 27 and 40 s: green is said after the second, blue after the
+		// third, and nothing after the fourth, which the text leaves out.
+		want := strings.Join([]string{label(1), "0:01 Red comes first.", label(2), "0:16 Then green.", label(3), "0:31 Blue comes last."}, "\n")
+		if got := result.Content[1].Text; got != want {
+			t.Errorf("text\n%s\nwant\n%s", got, want)
+		}
+		fields(t, result.Meta, map[string]string{"captions": `"sidecar"`})
+
+		// With a query, the frames are where it is said.
+		found, _ := watch(t, "claude-code", tools.WatchArgs{Source: talk, Frames: 12, Query: "blue", Language: "auto"})
+		at := times(t, found.Meta)
+		if len(at) != 1 || at[0] < 30.9 || at[0] > 31 {
+			t.Errorf("frames at %v, want one at 31 s", at)
+		}
+		if text := found.Content[1].Text; !strings.HasPrefix(text, "#1 0:3") || !strings.Contains(text, "Blue comes last.") {
+			t.Errorf("text %q", text)
+		}
+		fields(t, found.Meta, map[string]string{"matches": "1"})
+
+		// When a page of speech fills before the span ends, the frames end there too.
+		c := fx.call(t, "claude-code")
+		c.Settings.TranscriptChars = 30
+		paged, err := tools.Default.Watch(c, tools.WatchArgs{Source: talk, Frames: 4, Detail: "full", Language: "auto"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		fields(t, paged.Meta, map[string]string{"span": "[0,16]", "next_start_seconds": "16"})
+		for _, at := range times(t, paged.Meta) {
+			if at >= 16 {
+				t.Errorf("a frame at %v, past the page", at)
+			}
+		}
+		if text := paged.Content[1].Text; !strings.Contains(text, "Red") || strings.Contains(text, "green") {
+			t.Errorf("text %q", text)
+		}
+	})
+
+	t.Run("watching a video longer than ten minutes tells the agent to watch it in parts", func(t *testing.T) {
+		eleven := filepath.Join(fx.dir, "eleven.mp4")
+		ffmpeg(t, "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=2:duration=660", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", eleven)
+		hint := func(args tools.WatchArgs) string {
+			result, _ := watch(t, "claude-code", args)
+			text, _ := result.Meta.Get("hint")
+			s, _ := text.(string)
+			return s
+		}
+		watching := tools.WatchArgs{Source: eleven, FPS: 1, Frames: tools.MaxFrames, Detail: "none"}
+		if got := hint(watching); !strings.Contains(got, "11 minutes remain") || !strings.Contains(got, "2 parts of 10 minutes") {
+			t.Errorf("hint %q", got)
+		}
+		// An overview of it says how far apart its frames are, and how to watch it all.
+		overview := tools.WatchArgs{Source: eleven, Frames: 12, Detail: "none"}
+		if got := hint(overview); !strings.Contains(got, "a frame every 55 s") || !strings.Contains(got, "2 parts of 10 minutes") {
+			t.Errorf("overview hint %q", got)
+		}
+		// A part with an end, or a rest under ten minutes, is watched here.
+		part := watching
+		part.End = ptr(600)
+		late := watching
+		late.Start = 120
+		for _, args := range []tools.WatchArgs{part, late} {
+			if got := hint(args); got != "" {
+				t.Errorf("%+v: hint %q", args, got)
+			}
 		}
 	})
 
@@ -304,14 +417,22 @@ func TestWatchVideo(t *testing.T) {
 		}
 	})
 
-	t.Run("audio-only sources are refused with a next step", func(t *testing.T) {
+	t.Run("an audio-only source with nothing else to show is refused with a next step", func(t *testing.T) {
 		_, watchErr := tools.Default.Watch(fx.call(t, "claude-code"), tools.WatchArgs{Source: fx.beep, Frames: 12})
 		_, frameErr := tools.Default.Frame(fx.call(t, "claude-code"), tools.FrameArgs{Source: fx.beep, At: 1})
 		for _, err := range []error{watchErr, frameErr} {
 			failure, ok := rustle.AsError(err)
-			if !ok || failure.Code != "NO_VIDEO_TRACK" || !strings.Contains(failure.Recovery, "listen_video") {
+			if !ok || failure.Code != "NO_VIDEO_TRACK" || !strings.Contains(failure.Recovery, "listen") {
 				t.Errorf("error %#v", err)
 			}
+		}
+		// With its sound asked for, it is heard, and the missing frames are a note.
+		result, c := watch(t, "claude-code", tools.WatchArgs{Source: fx.beep, Frames: 12, Listen: "analysis"})
+		if len(result.Content) != 1 || result.Content[0].MimeType != "image/png" {
+			t.Errorf("content %+v", result.Content)
+		}
+		if !slices.Contains(c.Notes.List(), "audio only: no frames") {
+			t.Errorf("notes %q", c.Notes.List())
 		}
 	})
 }

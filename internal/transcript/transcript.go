@@ -856,18 +856,18 @@ func endsSentence(text string) bool {
 }
 
 // Paragraphs merges cues into paragraphs of about shortest to longest seconds that end at
-// sentence ends.
+// sentence ends, and at every break: a paragraph never spans one.
 //
 // Sentences often end inside a cue, so cues are split there and the split's time is
 // interpolated by character position.
-func Paragraphs(cues []Cue, shortest, longest float64) []Paragraph {
+func Paragraphs(cues []Cue, shortest, longest float64, breaks ...float64) []Paragraph {
 	var result []Paragraph
 	var parts []string
 	first, last := 0.0, 0.0
 	add := func(at, until float64, piece string) {
 		long := at-first >= longest
 		paused := at-last >= pause && at-first >= shortest
-		if len(parts) > 0 && (long || paused) {
+		if len(parts) > 0 && (long || paused || crosses(breaks, first, at)) {
 			result = append(result, Paragraph{first, last, joinParts(parts)})
 			parts = parts[:0]
 		}
@@ -913,6 +913,16 @@ func Paragraphs(cues []Cue, shortest, longest float64) []Paragraph {
 		result[i].End = result[i+1].Start
 	}
 	return result
+}
+
+// crosses reports whether a break falls after from, up to and including to.
+func crosses(breaks []float64, from, to float64) bool {
+	for _, b := range breaks {
+		if from < b && b <= to {
+			return true
+		}
+	}
+	return false
 }
 
 // Primary is the primary language subtag: "en-US" and "en" name the same spoken language.
@@ -1183,10 +1193,22 @@ func fit(text string, budget int) string {
 
 func line(p Paragraph) string { return rustle.Clock(p.Start) + " " + p.Text }
 
-// Search finds the units that mention any `a|b` alternative (case-insensitive), each with
+// Match is one line of a search: the matching units and their neighbours, led by the
+// clock of Start. At is when the first match in it starts.
+type Match struct {
+	Start, At float64
+	Text      string
+}
+
+// NoMatch says that nothing said matches query, naming it as JSON.
+func NoMatch(query string) string {
+	return "Nothing said mentions " + string(rustle.AppendString(nil, rustle.TrimSpace(query))) + "."
+}
+
+// Matches finds the units that mention any `a|b` alternative (case-insensitive), each with
 // the unit before and after it; neighbouring hits share one line, led by its first unit's
 // time. count is the number of units that matched.
-func Search(units []Paragraph, query string, budget int) (text string, count int, notes []string) {
+func Matches(units []Paragraph, query string, budget int) (found []Match, count int, notes []string) {
 	var terms []string
 	for _, t := range strings.Split(query, "|") {
 		if t = strings.ToLower(rustle.CollapseSpace(t)); t != "" {
@@ -1204,22 +1226,21 @@ func Search(units []Paragraph, query string, budget int) (text string, count int
 		}
 	}
 	if len(hits) == 0 {
-		return "Nothing said mentions " + string(rustle.AppendString(nil, rustle.TrimSpace(query))) + ".", 0, nil
+		return nil, 0, nil
 	}
 	if len(hits) > MaxMatches {
 		notes = append(notes, fmt.Sprintf("showing the first %d of %d matches; narrow the query or pass start_seconds", MaxMatches, len(hits)))
 	}
-	// Each group is the units [from, to).
-	var groups [][2]int
+	// Each group is the units [from, to) and its first hit.
+	var groups [][3]int
 	for _, i := range hits[:min(len(hits), MaxMatches)] {
 		from, to := max(0, i-1), min(len(units), i+2)
 		if n := len(groups); n > 0 && from <= groups[n-1][1] {
 			groups[n-1][1] = max(groups[n-1][1], to)
 		} else {
-			groups = append(groups, [2]int{from, to})
+			groups = append(groups, [3]int{from, to, i})
 		}
 	}
-	var lines []string
 	used := 0
 	for _, g := range groups {
 		parts := make([]string, 0, g[1]-g[0])
@@ -1228,19 +1249,21 @@ func Search(units []Paragraph, query string, budget int) (text string, count int
 		}
 		text := rustle.Clock(units[g[0]].Start) + " " + joinParts(parts)
 		size := Cost(text) + 1
-		if len(lines) > 0 && used+size > budget {
+		if len(found) > 0 && used+size > budget {
 			notes = append(notes, "stopped at the size limit; narrow the query")
 			break
 		}
-		lines = append(lines, text)
+		found = append(found, Match{Start: units[g[0]].Start, At: units[g[2]].Start, Text: text})
 		used += size
 	}
-	return strings.Join(lines, "\n"), len(hits), notes
+	return found, len(hits), notes
 }
 
 // Paged is one page of paragraphs.
 type Paged struct {
 	Lines []string
+	// Starts is when each line's paragraph starts.
+	Starts []float64
 	// Next is where the following page starts, when HasNext.
 	Next    float64
 	HasNext bool
@@ -1260,11 +1283,13 @@ func Page(paras []Paragraph, budget int) Paged {
 		size := Cost(text) + 1
 		if used+size <= budget {
 			page.Lines = append(page.Lines, text)
+			page.Starts = append(page.Starts, paras[index].Start)
 			used += size
 			continue
 		}
 		if len(page.Lines) == 0 {
 			page.Lines = append(page.Lines, fit(text, budget))
+			page.Starts = append(page.Starts, paras[index].Start)
 			page.Cut, page.HasCut = paras[index].Start, true
 			index++
 		}

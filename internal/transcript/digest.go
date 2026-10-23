@@ -621,10 +621,10 @@ func (h *maxHeap) swap(a, b int) {
 }
 
 // Digest is the digest's lines: kept sentences grouped into lines of about span seconds
-// (0 picks a span from the duration), each starting at its first sentence. "…" stands
-// where speech was skipped: between two sentences of a line (followed by the next
-// sentence's time), at the start of a line after a gap, and at the end.
-func Digest(units []Cue, chapters []rustle.Chapter, span float64) []Cue {
+// (0 picks a span from the duration), each starting at its first sentence, and no line
+// spanning a break. "…" stands where speech was skipped: between two sentences of a line
+// (followed by the next sentence's time), at the start of a line after a gap, and at the end.
+func Digest(units []Cue, chapters []rustle.Chapter, span float64, breaks ...float64) []Cue {
 	var tidy []Cue
 	for _, u := range units {
 		if text := TidySpeech(u.Text); text != "" {
@@ -669,7 +669,7 @@ func Digest(units []Cue, chapters []rustle.Chapter, span float64) []Cue {
 		unit := tidy[i]
 		gap := i > previous+1
 		switch n := len(lines); {
-		case n == 0 || unit.Start-lines[n-1].Start >= span:
+		case n == 0 || unit.Start-lines[n-1].Start >= span || crosses(breaks, lines[n-1].Start, unit.Start):
 			text := unit.Text
 			if gap && i > 0 {
 				text = "… " + text

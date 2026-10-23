@@ -18,7 +18,6 @@ import (
 	"github.com/vibeslop/rustle-mcp/internal/rustle"
 	"github.com/vibeslop/rustle-mcp/internal/source"
 	"github.com/vibeslop/rustle-mcp/internal/transcript"
-	"github.com/vibeslop/rustle-mcp/internal/youtube"
 )
 
 // WhisperSeconds is the speech one call transcribes at most.
@@ -32,24 +31,40 @@ const speechInstall = "The user can enable it by installing whisper.cpp (macOS: 
 // seconds where nothing marks a sentence's end.
 const maxSentence = 12
 
-func transcriptOp(c *rustle.Call, args TranscriptArgs) (*rustle.Result, error) {
-	id, err := source.Identify(args.Source, c.Settings)
+// ReadTranscript reads the transcript of a resolved source as text.
+func ReadTranscript(c *rustle.Call, record *rustle.Record, args TranscriptArgs, fetchCaptions func(rustle.Caption) (string, error)) (*rustle.Result, error) {
+	said, err := speak(c, record, args, fetchCaptions)
 	if err != nil {
 		return nil, err
 	}
-	record, err := source.Resolve(c, id)
-	if err != nil {
-		return nil, err
-	}
-	return ReadTranscript(c, record, args, func(track rustle.Caption) (string, error) {
-		return youtube.CaptionText(c, record, track)
-	})
+	return &rustle.Result{Meta: said.meta, Content: []rustle.Block{rustle.TextBlock(said.text())}}, nil
 }
 
-// ReadTranscript reads the transcript of a resolved source. Captions and sidecars never
-// touch ffmpeg, so a caption read is not held up by media work on the same source; only
-// transcribe decodes.
-func ReadTranscript(c *rustle.Call, record *rustle.Record, args TranscriptArgs, fetchCaptions func(rustle.Caption) (string, error)) (*rustle.Result, error) {
+// spoken is what is said in a span: lines led by their clock, ready to lay out under the
+// frames they go with.
+type spoken struct {
+	meta  *rustle.Obj
+	lines []string
+	// at is when each line starts; with a query, when its first match does.
+	at []float64
+	// empty stands in for lines when there are none.
+	empty string
+	// next is where the lines end when that is before the span asked for, because a page
+	// filled or transcription stopped.
+	next *float64
+}
+
+func (s *spoken) text() string {
+	if len(s.lines) == 0 {
+		return s.empty
+	}
+	return strings.Join(s.lines, "\n")
+}
+
+// speak reads the speech of a resolved source. Captions and sidecars never touch ffmpeg,
+// so a caption read is not held up by media work on the same source; only transcribe
+// decodes.
+func speak(c *rustle.Call, record *rustle.Record, args TranscriptArgs, fetchCaptions func(rustle.Caption) (string, error)) (*spoken, error) {
 	duration := record.Duration
 	start := args.Start
 	end := math.Inf(1)
@@ -147,19 +162,35 @@ func ReadTranscript(c *rustle.Call, record *rustle.Record, args TranscriptArgs, 
 		chapters = record.Chapters
 		budget -= transcript.Cost(rustle.Compact(chapters))
 	}
-	var text string
+	out := &spoken{}
 	next, hasNext := 0.0, false
 	matches, hasMatches := 0, false
 	digested := !searched && args.Detail == "digest"
 	if searched {
-		var notes []string
-		text, matches, notes = transcript.Search(within(said.sentences()), args.Query, budget)
-		hasMatches = true
+		found, count, notes := transcript.Matches(within(said.sentences()), args.Query, budget)
+		for _, m := range found {
+			out.lines = append(out.lines, m.Text)
+			out.at = append(out.at, m.At)
+		}
+		if count == 0 {
+			out.empty = transcript.NoMatch(args.Query)
+		}
+		matches, hasMatches = count, true
 		c.Notes.Add(notes...)
 	} else {
-		units := within(said.paragraphs())
-		if digested {
-			units = transcript.Digest(within(said.sentences()), record.Chapters, 0)
+		var units []transcript.Cue
+		switch {
+		case digested:
+			units = transcript.Digest(within(said.sentences()), record.Chapters, 0, args.Breaks...)
+		case len(args.Breaks) > 0:
+			// Shown with frames from start, speech begun before it would sit under the wrong one.
+			for _, p := range within(transcript.Paragraphs(said.cues, transcript.MinParagraph, transcript.MaxParagraph, append([]float64{start}, args.Breaks...)...)) {
+				if p.Start >= start {
+					units = append(units, p)
+				}
+			}
+		default:
+			units = within(said.paragraphs())
 		}
 		cut := transcript.Page(units, budget)
 		next, hasNext = cut.Next, cut.HasNext
@@ -179,10 +210,9 @@ func ReadTranscript(c *rustle.Call, record *rustle.Record, args TranscriptArgs, 
 			next, hasNext = rustle.MS(heardTo), true
 			c.Notes.Add("transcribed up to " + rustle.Clock(heardTo) + "; call again with start_seconds=" + rustle.Short(heardTo) + " and transcribe=true for more")
 		}
-		if len(cut.Lines) > 0 {
-			text = strings.Join(cut.Lines, "\n")
-		} else {
-			text = transcript.Silence(start, covered)
+		out.lines, out.at = cut.Lines, cut.Starts
+		if len(cut.Lines) == 0 {
+			out.empty = transcript.Silence(start, covered)
 		}
 	}
 	meta := rustle.NewObj().Set("title", record.Title)
@@ -205,7 +235,11 @@ func ReadTranscript(c *rustle.Call, record *rustle.Record, args TranscriptArgs, 
 	if chapters != nil {
 		meta.Set("chapters", chapters)
 	}
-	return &rustle.Result{Meta: meta, Content: []rustle.Block{rustle.TextBlock(text)}}, nil
+	if hasNext {
+		out.next = &next
+	}
+	out.meta = meta
+	return out, nil
 }
 
 // speech is a parsed caption track. Digests and searches use sentences, so the 20-40 s

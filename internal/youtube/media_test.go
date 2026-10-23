@@ -331,7 +331,7 @@ func TestYouTubeWindows(t *testing.T) {
 		t.Cleanup(stub.calm)
 		stub.failNext(403, 403, 403)
 		_, err := Media(c, windowRecord(), "video", 3, 3)
-		if e := expectCode(t, err, "YOUTUBE_ACCESS_DENIED"); !strings.Contains(e.Recovery, "read_transcript") {
+		if e := expectCode(t, err, "YOUTUBE_ACCESS_DENIED"); !strings.Contains(e.Recovery, "frames=0") {
 			t.Errorf("recovery %q", e.Recovery)
 		}
 		stub.failNext(429)
@@ -350,7 +350,7 @@ func TestYouTubeWindows(t *testing.T) {
 		stub.setPlayerStatus("LOGIN_REQUIRED")
 		_, err = Media(c, windowRecord(), "video", 3, 3)
 		stub.setPlayerStatus("")
-		if e := expectCode(t, err, "YOUTUBE_ACCESS_DENIED"); !strings.Contains(e.Recovery, "read_transcript") {
+		if e := expectCode(t, err, "YOUTUBE_ACCESS_DENIED"); !strings.Contains(e.Recovery, "frames=0") {
 			t.Errorf("recovery %q", e.Recovery)
 		}
 	})

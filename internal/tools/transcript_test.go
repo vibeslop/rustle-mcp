@@ -43,7 +43,7 @@ func (s *served) fetch(t rustle.Caption) (string, error) {
 
 func offline(rustle.Caption) (string, error) { return "", errors.New("no caption fetch expected") }
 
-// reading is one read_transcript call: its arguments and the settings it runs with.
+// reading is one reading of speech: its arguments and the settings it runs with.
 type reading struct {
 	args     TranscriptArgs
 	settings *rustle.Settings
@@ -494,7 +494,7 @@ func captionReadInFreshProcess(t *testing.T, folder, video, log string) {
 	write(t, sidecar, "1\n00:00:00,000 --> 00:00:02,000\nRed &amp; green\n\n2\n00:00:02,000 --> 00:00:04,000\nBlue then yellow\n")
 	s := testSettings(t)
 	s.MediaRoots, s.FFmpeg, s.FFprobe = []string{folder}, standIn, standIn
-	result, err := transcriptOp(newCall(t, s, "test"), TranscriptArgs{Source: video, Language: "auto", Detail: "full"})
+	result, err := watch(newCall(t, s, "test"), WatchArgs{Source: video, Language: "auto", Detail: "full"})
 	if err != nil {
 		t.Fatal(err)
 	}

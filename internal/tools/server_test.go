@@ -16,7 +16,7 @@ import (
 	"github.com/vibeslop/rustle-mcp/internal/rustle"
 )
 
-var toolNames = []string{"find_videos", "read_transcript", "watch_video", "inspect_frame", "listen_video"}
+var toolNames = []string{"find_videos", "watch_video", "inspect_frame"}
 
 const remoteSource = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
@@ -47,8 +47,7 @@ func fake[T any](r *recorder, name string) Op[T] {
 }
 
 func fakeOps(r *recorder) Ops {
-	return Ops{Find: fake[FindArgs](r, "find"), Transcript: fake[TranscriptArgs](r, "transcript"),
-		Watch: fake[WatchArgs](r, "watch"), Frame: fake[FrameArgs](r, "frame"), Listen: fake[ListenArgs](r, "listen")}
+	return Ops{Find: fake[FindArgs](r, "find"), Watch: fake[WatchArgs](r, "watch"), Frame: fake[FrameArgs](r, "frame")}
 }
 
 // reply is a JSON-RPC answer as the client reads it.
@@ -204,7 +203,7 @@ func notesOf(t *testing.T, result toolResult) []string {
 	return notes
 }
 
-func TestFiveReadOnlyToolsWithLeanSchemasAndNoOutputSchemas(t *testing.T) {
+func TestThreeReadOnlyToolsWithLeanSchemasAndNoOutputSchemas(t *testing.T) {
 	session := connect(t, fakeOps(&recorder{}), "claude-code")
 	var listed struct {
 		Tools []struct {
@@ -252,10 +251,11 @@ func TestFiveReadOnlyToolsWithLeanSchemasAndNoOutputSchemas(t *testing.T) {
 	}
 	equal(t, names, toolNames)
 	t.Logf("tool surface: %d characters", size)
-	// Every client sends this with each request. read_transcript's detail argument took it to
-	// 2,605, and crop on watch_video with detail on inspect_frame, for looking closer, to 2,885.
+	// Every client sends this with each request. Five tools took it to 2,885; folding
+	// read_transcript and listen_video into watch_video brought it to 2,454, and saying it
+	// watches a frame a second by default to 2,489.
 	// Raise it deliberately, not by drift.
-	if size > 2900 {
+	if size > 2500 {
 		t.Errorf("tool surface grew to %d characters", size)
 	}
 	for _, name := range toolNames {
@@ -278,22 +278,32 @@ func TestLenientArguments(t *testing.T) {
 		{"find_videos", `{"query":"cats","limit":0}`, "find", `{"limit":1}`, "limit 0 clamped to 1"},
 		{"find_videos", `{"url":"https://example.com/videos","query":"cats"}`, "find", `{"url":"https://example.com/videos","query":""}`, "query and channel ignored with url"},
 		{"find_videos", `{"query":"cats","limit":2.4}`, "find", `{"limit":2}`, "limit 2.4 rounded to 2"},
-		{"watch_video", `{"source":"` + remoteSource + `","frames":100}`, "watch", `{"frames":48}`, "frames 100 clamped to 48"},
+		{"watch_video", `{"source":"` + remoteSource + `","frames":200}`, "watch", `{"frames":120}`, "frames 200 clamped to 120"},
 		{"watch_video", `{"source":"` + remoteSource + `","frames":12.5}`, "watch", `{"frames":13}`, "frames 12.5 rounded to 13"},
 		{"watch_video", `{"source":"` + remoteSource + `","fps":30}`, "watch", `{"fps":8}`, "fps 30 clamped to 8"},
 		{"watch_video", `{"source":"` + remoteSource + `","fps":0}`, "watch", `{"fps":0}`, "fps ignored: it must be positive"},
 		{"watch_video", `{"source":"` + remoteSource + `","start_seconds":-5}`, "watch", `{"start":0}`, "start_seconds -5 clamped to 0"},
-		{"watch_video", `{"source":"` + remoteSource + `","include_audio":true}`, "watch", `{"includeAudio":false}`, "include_audio ignored: this client can't hear audio; use listen_video"},
-		{"listen_video", `{"source":"` + remoteSource + `","seconds":600}`, "listen", `{"seconds":60,"output":"analysis"}`, "seconds 600 clamped to 60"},
-		{"listen_video", `{"source":"` + remoteSource + `","seconds":0}`, "listen", `{"seconds":0.1}`, "seconds 0 clamped to 0.1"},
+		{"watch_video", `{"source":"` + remoteSource + `","frames":0}`, "watch", `{"frames":0,"detail":"digest"}`, ""},
+		{"watch_video", `{"source":"` + remoteSource + `","listen":true}`, "watch", `{"listen":"analysis","detail":"full"}`, ""},
+		{"watch_video", `{"source":"` + remoteSource + `","listen":"audio"}`, "watch", `{"listen":"audio"}`, "this client may not pass audio to the model; listen=analysis can"},
+		{"watch_video", `{"source":"` + remoteSource + `","listen":false}`, "watch", `{"listen":""}`, ""},
+		{"watch_video", `{"source":"` + remoteSource + `","query":"cats","fps":4}`, "watch", `{"fps":0,"query":"cats"}`, "fps ignored with query: the frames are where it is said"},
+		{"watch_video", `{"source":"` + remoteSource + `","frames":0,"detail":"none","query":"cats"}`, "watch", `{"query":"cats"}`, ""},
 		{"watch_video", `{"source":"` + remoteSource + `","crop":[0.5,0.5,1,1]}`, "watch", `{"crop":[0.5,0.5,0.5,0.5]}`, "crop clipped to the frame: [0.5, 0.5, 0.5, 0.5]"},
 		{"inspect_frame", `{"source":"` + remoteSource + `","at_seconds":3}`, "frame", `{"detail":"fit"}`, ""},
 		{"inspect_frame", `{"source":"` + remoteSource + `","at_seconds":3,"crop":[0.6,0,0.6,1]}`, "frame", `{"crop":[0.6,0,0.4,1]}`, "crop clipped to the frame: [0.6, 0, 0.4, 1]"},
-		{"read_transcript", `{"source":"` + remoteSource + `","seconds":300,"mode":"transcript"}`, "transcript", `{"start":0}`, "ignored unknown arguments: mode, seconds"},
-		{"read_transcript", `{"source":"` + remoteSource + `","start_seconds":"90"}`, "transcript", `{"start":90}`, ""},
+		{"watch_video", `{"source":"` + remoteSource + `","seconds":300,"mode":"transcript"}`, "watch", `{"start":0}`, "ignored unknown arguments: mode, seconds"},
+		{"watch_video", `{"source":"` + remoteSource + `","start_seconds":"90"}`, "watch", `{"start":90}`, ""},
 		// A span asks to read that part, so it gets every word; the whole video gets the digest.
-		{"read_transcript", `{"source":"` + remoteSource + `","start_seconds":60,"end_seconds":120}`, "transcript", `{"detail":"full"}`, ""},
-		{"read_transcript", `{"source":"` + remoteSource + `"}`, "transcript", `{"detail":"digest"}`, ""},
+		{"watch_video", `{"source":"` + remoteSource + `","start_seconds":60,"end_seconds":120}`, "watch", `{"detail":"full"}`, ""},
+		// By default a call watches as a person does: a frame a second, every word.
+		{"watch_video", `{"source":"` + remoteSource + `"}`, "watch", `{"fps":1,"frames":120,"detail":"full","language":"auto"}`, ""},
+		// A count of frames is an overview, with the key sentences, and stays one when it
+		// continues from next_start_seconds; an end asks to read that part.
+		{"watch_video", `{"source":"` + remoteSource + `","frames":12}`, "watch", `{"fps":0,"frames":12,"detail":"digest"}`, ""},
+		{"watch_video", `{"source":"` + remoteSource + `","frames":12,"start_seconds":600}`, "watch", `{"fps":0,"detail":"digest"}`, ""},
+		{"watch_video", `{"source":"` + remoteSource + `","frames":12,"start_seconds":60,"end_seconds":120}`, "watch", `{"detail":"full"}`, ""},
+		{"watch_video", `{"source":"` + remoteSource + `","query":"cats"}`, "watch", `{"fps":0,"frames":12}`, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.tool+" "+tc.args+" is adjusted, not rejected", func(t *testing.T) {
@@ -335,8 +345,8 @@ func TestNullMeansTheDefault(t *testing.T) {
 		t.Fatalf("failed: %+v", result.Content)
 	}
 	args := r.list()[0].args.(WatchArgs)
-	equal(t, args.Frames, 12)
-	equal(t, args.FPS, 0.0)
+	equal(t, args.Frames, 120)
+	equal(t, args.FPS, 1.0)
 	equal(t, args.End, (*float64)(nil))
 	if notes, ok := metaOf(t, result)["notes"]; ok {
 		t.Errorf("notes %v", notes)
@@ -354,7 +364,9 @@ func TestMalformedInputIsOneInvalidArgumentsErrorWithARecovery(t *testing.T) {
 		{"inspect_frame", map[string]any{"source": remoteSource}},
 		{"inspect_frame", map[string]any{"source": remoteSource, "at_seconds": 1, "crop": []any{2, 2, 1, 1}}},
 		{"find_videos", map[string]any{}},
-		{"listen_video", map[string]any{"source": remoteSource, "output": "midi"}},
+		{"watch_video", map[string]any{"source": remoteSource, "listen": "midi"}},
+		{"watch_video", map[string]any{"source": remoteSource, "detail": "everything"}},
+		{"watch_video", map[string]any{"source": remoteSource, "frames": 0, "detail": "none"}},
 		{"watch_video", map[string]any{"source": remoteSource, "frames": "many"}},
 	} {
 		result := session.call(tc.tool, tc.args)
@@ -378,11 +390,11 @@ func TestMalformedInputIsOneInvalidArgumentsErrorWithARecovery(t *testing.T) {
 
 func TestOperationErrorsKeepTheirCodeRetryabilityAndRecovery(t *testing.T) {
 	ops := fakeOps(&recorder{})
-	ops.Transcript = func(*rustle.Call, TranscriptArgs) (*rustle.Result, error) {
+	ops.Watch = func(*rustle.Call, WatchArgs) (*rustle.Result, error) {
 		return nil, rustle.Fail("YouTube is rate limiting this connection.", "RATE_LIMITED", "Wait.").Retry(300)
 	}
 	session := connect(t, ops, "claude-code")
-	result := session.call("read_transcript", map[string]any{"source": remoteSource})
+	result := session.call("watch_video", map[string]any{"source": remoteSource})
 	if result.IsError == nil || !*result.IsError {
 		t.Fatal("not an error")
 	}
@@ -395,8 +407,8 @@ func TestAudioOutputFollowsTheClient(t *testing.T) {
 	for client, output := range map[string]string{"claude-code": "analysis", "codex-mcp-client": "audio"} {
 		r := &recorder{}
 		session := connect(t, fakeOps(r), client)
-		session.call("listen_video", map[string]any{"source": remoteSource})
-		if got := r.list()[0].args.(ListenArgs).Output; got != output {
+		session.call("watch_video", map[string]any{"source": remoteSource, "listen": true})
+		if got := r.list()[0].args.(WatchArgs).Listen; got != output {
 			t.Errorf("%s got %s, want %s", client, got, output)
 		}
 	}
@@ -414,15 +426,15 @@ func TestRenderPutsMetadataFirstAndSharesTheBlockWithLeadingText(t *testing.T) {
 func TestIdenticalCallsOnARemoteSourceAreAnsweredFromMemory(t *testing.T) {
 	r := &recorder{}
 	session := connect(t, fakeOps(r), "claude-code")
-	session.call("read_transcript", map[string]any{"source": remoteSource})
-	session.call("read_transcript", map[string]any{"source": remoteSource})
+	session.call("find_videos", map[string]any{"query": "cats"})
+	session.call("find_videos", map[string]any{"query": "cats"})
 	equal(t, len(r.list()), 1)
 }
 
 func TestARememberedResultKeepsTheNotesItsOperationAdded(t *testing.T) {
-	// watch_video runs again (its sheets are cached by record instead); read_transcript is
+	// watch_video runs again (its sheets are cached by record instead); find_videos is
 	// answered from memory, and must still say what its operation noted.
-	for tool, runs := range map[string]int{"watch_video": 2, "read_transcript": 1} {
+	for tool, runs := range map[string]int{"watch_video": 2, "find_videos": 1} {
 		count := 0
 		ops := fakeOps(&recorder{})
 		noting := func(c *rustle.Call) (*rustle.Result, error) {
@@ -431,10 +443,14 @@ func TestARememberedResultKeepsTheNotesItsOperationAdded(t *testing.T) {
 			return &rustle.Result{Meta: rustle.NewObj()}, nil
 		}
 		ops.Watch = func(c *rustle.Call, _ WatchArgs) (*rustle.Result, error) { return noting(c) }
-		ops.Transcript = func(c *rustle.Call, _ TranscriptArgs) (*rustle.Result, error) { return noting(c) }
+		ops.Find = func(c *rustle.Call, _ FindArgs) (*rustle.Result, error) { return noting(c) }
 		session := connect(t, ops, "claude-code")
-		first := notesOf(t, session.call(tool, map[string]any{"source": remoteSource}))
-		second := notesOf(t, session.call(tool, map[string]any{"source": remoteSource}))
+		args := map[string]any{"source": remoteSource}
+		if tool == "find_videos" {
+			args = map[string]any{"query": "cats"}
+		}
+		first := notesOf(t, session.call(tool, args))
+		second := notesOf(t, session.call(tool, args))
 		equal(t, second, first)
 		equal(t, second, []string{"the span holds 3 distinct frames, not 12"})
 		if count != runs {
@@ -446,7 +462,7 @@ func TestARememberedResultKeepsTheNotesItsOperationAdded(t *testing.T) {
 func TestACancelledCallGetsNoReply(t *testing.T) {
 	started, ended := make(chan struct{}), make(chan error, 1)
 	ops := fakeOps(&recorder{})
-	ops.Listen = func(c *rustle.Call, _ ListenArgs) (*rustle.Result, error) {
+	ops.Watch = func(c *rustle.Call, _ WatchArgs) (*rustle.Result, error) {
 		close(started)
 		select {
 		case <-c.Ctx.Done():
@@ -458,7 +474,7 @@ func TestACancelledCallGetsNoReply(t *testing.T) {
 		}
 	}
 	session := connect(t, ops, "claude-code")
-	id, answer := session.start("tools/call", map[string]any{"name": "listen_video", "arguments": map[string]any{"source": remoteSource}})
+	id, answer := session.start("tools/call", map[string]any{"name": "watch_video", "arguments": map[string]any{"source": remoteSource}})
 	<-started
 	session.send(map[string]any{"jsonrpc": "2.0", "method": "notifications/cancelled", "params": map[string]any{"requestId": id, "reason": "user"}})
 	if err := <-ended; err != nil {

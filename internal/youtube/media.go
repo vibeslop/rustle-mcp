@@ -228,7 +228,7 @@ func currentStreams(c *rustle.Call, record *rustle.Record, refresh bool) (*Strea
 			return streamsOf(resolved), nil
 		}()
 		if err != nil {
-			if e, ok := rustle.AsError(err); ok && !bytes.Contains([]byte(e.Recovery), []byte("read_transcript")) {
+			if e, ok := rustle.AsError(err); ok && !bytes.Contains([]byte(e.Recovery), []byte(recovery)) {
 				wrapped := *e
 				wrapped.Recovery = e.Recovery + " " + recovery
 				return nil, &wrapped

@@ -76,16 +76,54 @@ func TestSheetsAreWholePatchesAndAtMost1176Wide(t *testing.T) {
 			}
 		}
 	}
-	twelve := Compose(cells(12), 4, cell)[0]
-	if twelve.Width != 1176 || twelve.Height != 504 {
-		t.Errorf("twelve cells: %dx%d, want 1176x504", twelve.Width, twelve.Height)
+	// The label strips take twelve 16:9 cells to 20 rows of patches; cells 3% smaller fit 19.
+	cell = FitPatches(cell, 12, 4)
+	if cell != [2]int{283, 159} {
+		t.Errorf("fitted cell %v, want [283 159]", cell)
 	}
-	if tokens := rustle.ImageTokens(twelve.Width, twelve.Height); tokens > 756 {
+	twelve := Compose(cells(12), 4, cell)[0]
+	if twelve.Width != 1148 || twelve.Height != 532 {
+		t.Errorf("twelve cells: %dx%d, want 1148x532", twelve.Width, twelve.Height)
+	}
+	if tokens := rustle.ImageTokens(twelve.Width, twelve.Height); tokens > 779 {
 		t.Errorf("twelve cells cost %d tokens", tokens)
 	}
 	// Thirteen cells: a full sheet, then one cell, never a sheet of twelve empty slots.
-	if got, want := sizes(Compose(cells(13), 4, cell)), [][2]int{{1176, 504}, {308, 168}}; !reflect.DeepEqual(got, want) {
+	if got, want := sizes(Compose(cells(13), 4, cell)), [][2]int{{1148, 532}, {308, 196}}; !reflect.DeepEqual(got, want) {
 		t.Errorf("thirteen cells: %v, want %v", got, want)
+	}
+	// Where a few percent saves no patches, cells keep their size.
+	if got := FitPatches([2]int{392, 221}, 1, 1); got != [2]int{392, 221} {
+		t.Errorf("one cell fitted to %v", got)
+	}
+}
+
+func TestLabelsSitAboveTheirFramesAndCoverNoneOfThem(t *testing.T) {
+	cells := []Cell{
+		{Frame: solid(292, 164, 200, 0), First: 1, Last: 1},
+		{Frame: solid(292, 164, 200, 1), First: 2, Last: 3, From: 1, To: 2},
+	}
+	sheet := Compose(cells, 2, [2]int{292, 164})[0]
+	band := Band(292)
+	for y := band; y < band+164; y++ {
+		for x := range 292 {
+			if at := (y*sheet.Width + x) * 3; sheet.RGB[at] != 200 {
+				t.Fatalf("pixel (%d, %d) of the first frame is %d", x, y, sheet.RGB[at])
+			}
+		}
+	}
+	// The strip holds white label pixels, ending 1 px above the frame.
+	ink, last := 0, 0
+	for y := range band {
+		for x := range 292 {
+			if sheet.RGB[(y*sheet.Width+x)*3] == 255 {
+				ink++
+				last = y
+			}
+		}
+	}
+	if ink == 0 || last != band-2 {
+		t.Errorf("%d label pixels, the lowest in row %d; want some, the lowest in row %d", ink, last, band-2)
 	}
 }
 
@@ -250,7 +288,7 @@ func TestALowDetailSheetGetsHalfSizeCellsTrimmedToWholePatches(t *testing.T) {
 	if f := small[0].Frame; f.Width != 146 || f.Height != 82 {
 		t.Errorf("shrunk frame %dx%d, want 146x82", f.Width, f.Height)
 	}
-	if got, want := sizes(Compose(small, 4, cell)), [][2]int{{588, 252}}; !reflect.DeepEqual(got, want) {
+	if got, want := sizes(Compose(small, 4, cell)), [][2]int{{588, 280}}; !reflect.DeepEqual(got, want) {
 		t.Errorf("sheets %v, want %v", got, want)
 	}
 	detailed := make([]Cell, len(cells))
@@ -270,8 +308,8 @@ func TestAFrameWiderThanItsCellLosesEqualStripsFromBothSides(t *testing.T) {
 	}
 	wide := NewFrame(0, 10, 20, rgb)
 	sheet := Compose([]Cell{{Frame: wide, First: 1, Last: 1}}, 1, [2]int{6, 20})[0]
-	// Below the label badge, the cell shows source columns 2-7.
-	row := 19 * sheet.Width * 3
+	// The cell shows source columns 2-7.
+	row := (Band(6) + 19) * sheet.Width * 3
 	if got := [2]byte{sheet.RGB[row], sheet.RGB[row+5*3]}; got != [2]byte{40, 140} {
 		t.Errorf("bottom row starts %v, want [40 140]", got)
 	}

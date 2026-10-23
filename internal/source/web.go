@@ -714,7 +714,7 @@ func LocalVideos(folder string, s *rustle.Settings, limit int) (source string, r
 	}
 	if !info.IsDir() {
 		return "", nil, rustle.Fail(fmt.Sprintf("%s is a file, not a folder.", DisplayPath(root)), "INVALID_SOURCE",
-			"Pass it as source to read_transcript, watch_video, inspect_frame or listen_video.")
+			"Pass it as source to watch_video or inspect_frame.")
 	}
 
 	unreadable := rustle.Fail(fmt.Sprintf("Could not read the folder %s.", DisplayPath(root)), "ACCESS_DENIED",
