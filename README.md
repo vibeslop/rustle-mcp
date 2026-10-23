@@ -16,12 +16,14 @@ Rustle needs no API key and sends nothing to an inference service. It fetches, d
 
 ## How it watches and listens
 
-- **Sight.** `watch_video` lays out frames from across a video, or any span of it, as contact sheets with each frame labelled by its time, so the model takes in a whole video at a glance. Frames that barely change share one cell, so a slide that stays up doesn't fill the sheet. To follow motion it samples consecutive frames, up to 8 a second; to follow one part of the screen it crops.
+- **Watching, the way a person does.** `watch_video` shows the model a frame every second and every word said, two minutes at a time, as contact sheets. Each frame's number and time sit in a strip above it, never over the picture, and after each sheet comes what is said in its frames, under the same labels. Frames that barely change share one cell, so a slide that stays up doesn't fill the sheet. To follow fast motion it takes up to 8 frames a second; to follow one part of the screen it crops.
+- **An overview.** Ask for a number of frames and they're spread across the whole video instead, with its key sentences: about a third of the words, verbatim and timestamped, so an hour of speech fits in one call. A query keeps only the sentences about a topic and shows the frames where it comes up. With whisper.cpp installed, Rustle transcribes videos that have no captions.
+- **Long videos, in parts.** Watching an hour a second at a time would fill any model's context. Past ten minutes, Rustle tells an agent that can start subagents to split the video into ten-minute parts and give each to one on a small, fast model, in parallel; each watches its part and reports back what was shown and said.
+- **How it sounds.** `listen` adds up to a minute of lossless sound to that minute's frames and words: the music, the tone of a voice, a laugh, a pause. Claude can't hear audio, so it gets the sound as a picture instead: a spectrogram, with loudness, stereo balance, onsets and silences measured.
 - **A closer look.** `inspect_frame` returns one lossless frame and zooms into any region of it, enlarging small ones up to 4x, so the model can read small text, UI and faces.
-- **Hearing what is said.** `read_transcript` returns the video's key sentences, verbatim and timestamped, about a third of the words, so an hour of speech fits in one call. It can also return every word, a span, or only the sentences about a topic, and with whisper.cpp installed it transcribes videos that have no captions.
-- **Hearing how it sounds.** `listen_video` returns up to a minute of lossless sound per call: the music, the tone of a voice, a laugh, a pause. `watch_video` can attach short clips to its frames, so the model sees and hears the same moments. Claude can't hear audio, so it gets the sound as a picture instead: a spectrogram, with loudness, stereo balance, onsets and silences measured.
+- **Choosing between videos.** When a search turns up several videos of 20 minutes or more, Rustle tells the agent to hand each candidate to a subagent on a small, fast model, which watches it and reports back a few lines. Comparing long talks then fills the agent's context with summaries instead of whole videos.
 - **What Rustle draws is what the model sees.** Images are planned in the 28 px patches Claude bills by, and kept inside the limits past which Claude Code and Codex shrink and re-encode them. A whole 16:9 frame costs 336 tokens, and zooming into a region costs no more than the frame.
-- **Long videos are never downloaded whole.** From YouTube, Rustle fetches only the seconds around each frame or clip it needs, so looking at minute 50 doesn't wait for the 49 before it.
+- **Long videos are never downloaded whole.** From YouTube, Rustle fetches only the seconds around each frame or clip it needs, so looking at minute 50 doesn't wait for the 49 before it. Contact sheets come from a 480p stream, which is still three times sharper than a cell; single frames and crops come from up to 1080p. Two minutes watched take about a second.
 
 ## Install
 
@@ -49,10 +51,8 @@ Every tool except `find_videos` takes a `source`: a YouTube link or id, a web pa
 
 | Tool | Use it for | Returns |
 | --- | --- | --- |
-| `watch_video` | What is shown | Contact sheets of frames across the video or a span, each labelled with its time: 12 by default, up to 48. `fps` samples consecutive frames for motion; `crop` follows one region; `include_audio` adds short clips of the sound. |
+| `watch_video` | What is shown, said and heard | By default a frame a second and every word, two minutes per call from `start_seconds`, as contact sheets each followed by what is said in its frames; the result says where to continue. `frames` instead spreads that many frames, up to 120, across the video or a span, with the key sentences; `frames: 0` returns the words alone, and `detail` picks `"digest"`, `"full"` or `"none"`. `query` keeps the speech about a topic and puts the frames where it is said. `fps` changes the rate, up to 8 a second for motion; `crop` follows one region; `listen` adds the sound, as FLAC or a spectrogram, and limits the span to 60 seconds. |
 | `inspect_frame` | Small text, UI, faces | One lossless frame. A `crop` shows a region at full detail, enlarging small ones; `detail: "full"` sends every pixel. |
-| `read_transcript` | What is said | The key sentences of the whole video, about a third of the words. `detail: "full"` or a span returns every word; `query` returns matching sentences with context. |
-| `listen_video` | How it sounds | Up to 60 seconds of FLAC audio, or a spectrogram with levels, onsets and silences. |
 | `find_videos` | Finding videos | YouTube search results, a channel's videos, or the videos on a page or in a local folder. |
 
 Out-of-range arguments are clamped and unknown ones ignored, each with a note in the result. Errors say what went wrong and how to recover.
@@ -77,7 +77,7 @@ All settings are optional environment variables, set in the client's `env` block
 | `RUSTLE_WORKERS` | CPU count | ffmpeg processes run at once. |
 | `RUSTLE_TRANSCRIPT_CHARS` | `45000` | Transcript characters per call. |
 | `RUSTLE_FFMPEG`, `RUSTLE_FFPROBE` | found on `PATH` or in the usual install folders | Paths to the ffmpeg binaries. |
-| `RUSTLE_WHISPER_MODEL` | unset | A ggml model for whisper.cpp's `whisper-cli`. With both installed, `read_transcript` can transcribe videos that have no captions. |
+| `RUSTLE_WHISPER_MODEL` | unset | A ggml model for whisper.cpp's `whisper-cli`. With both installed, `watch_video` can transcribe videos that have no captions. |
 | `RUSTLE_PREFETCH` | on | At startup, fetch the visitor id YouTube requires, so the first YouTube call is faster. `0` makes Rustle contact YouTube only when asked to. |
 | `RUSTLE_WARM` | on | Keep a few ffmpeg processes started and waiting, saving 20–40 ms per decode. `0` turns it off. Not on Windows. |
 | `RUSTLE_TOKEN` | unset | Required by `rustle-mcp http`: the token in the server's address, `/mcp/<token>`, or sent as a bearer token. |
@@ -102,7 +102,7 @@ It logs you in to Vercel first if needed (through the Vercel CLI, which Node's `
 
 **Other hosts.** Any host that runs containers can build the repository's `Dockerfile`, such as Railway or Render. Set `RUSTLE_TOKEN` to a long random string; the address is then `https://your-host/mcp/<token>`, and opening the server in a browser shows how to connect each client. `RUSTLE_BACKUP` can name a second server's address, and `HTTPS_PROXY` a proxy, such as a paid residential one, which Rustle then uses only while YouTube refuses the tunnel.
 
-On a server, local paths are off unless `RUSTLE_MEDIA_ROOTS` names folders on it. Vercel caps a response at 4.5 MB, so long `listen_video` clips can fail there for clients that hear audio.
+On a server, local paths are off unless `RUSTLE_MEDIA_ROOTS` names folders on it. Vercel caps a response at 4.5 MB, so a minute of `listen` audio can fail there for clients that hear it.
 
 ## Privacy and limits
 
