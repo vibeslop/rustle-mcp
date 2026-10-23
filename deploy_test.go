@@ -7,7 +7,8 @@ import (
 
 func TestPinned(t *testing.T) {
 	got := pinned(vercelDockerfile, "1.2.3")
-	if !bytes.Contains(got, []byte("ARG VERSION=v1.2.3\n")) || !bytes.Contains(got, []byte("rustle-mcp@$VERSION;")) {
+	// No line ending in the checks: Windows checkouts end the embedded file's lines in CRLF.
+	if bytes.Contains(got, []byte("ARG VERSION=latest")) || !bytes.Contains(got, []byte("ARG VERSION=v1.2.3")) || !bytes.Contains(got, []byte("rustle-mcp@$VERSION;")) {
 		t.Errorf("release not pinned:\n%s", got)
 	}
 	for _, version := range []string{"dev", "1.2.3-0.20261020214600-4ad0bf9c1a2b"} {
