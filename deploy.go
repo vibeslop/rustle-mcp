@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/vibeslop/rustle-mcp/internal/mcp"
+	"github.com/vibeslop/rustle-mcp/internal/rustle"
+	"github.com/vibeslop/rustle-mcp/internal/youtube"
 )
 
 // The files a Vercel deployment needs, so deploying works without a checkout.
@@ -143,21 +145,25 @@ func deployTo(name, region string, out io.Writer) error {
 		return err
 	}
 
-	fmt.Fprintln(out, "Checking that YouTube answers each.")
-	for _, server := range []struct{ label, address string }{{place(region), address}, {"the backup in " + place(spare), backup}} {
-		if err := checkHosted(server.address); err != nil {
-			fmt.Fprintf(out, "  %s: %v\n", server.label, err)
-		} else {
-			fmt.Fprintf(out, "  YouTube answers %s.\n", server.label)
-		}
+	fmt.Fprintln(out, "Checking that YouTube answers each server.")
+	first := checkHosted(address)
+	fmt.Fprintln(out, checkLine(place(region), first))
+	second := checkHosted(backup)
+	fmt.Fprintln(out, checkLine(place(spare)+", the backup", second))
+	if v := verdict(name, region, first, second); v != "" {
+		fmt.Fprintln(out, v)
 	}
 
+	status := "Rustle is running."
+	if down(first) {
+		status = "Rustle is deployed but not answering yet."
+	}
 	note := ""
 	if fresh {
 		note = " It is new: give it to clients again if they used an older one."
 	}
 	fmt.Fprintf(out, `
-Rustle is running. Its private address works like a password:
+%s Its private address works like a password:
 
   %s
 
@@ -167,7 +173,7 @@ Codex: codex mcp add rustle --url %s
 Cursor, in mcp.json: "rustle": {"url": "%s"}
 
 The address is saved in %s.%s
-`, address, address, address, address, tokenFile, note)
+`, status, address, address, address, address, tokenFile, note)
 	return nil
 }
 
@@ -249,8 +255,51 @@ func productionURL(data []byte) (string, error) {
 	return strings.TrimSuffix(address, "/"), nil
 }
 
+// down is true when a server failed its check for a reason other than YouTube refusing it.
+func down(err error) bool { return err != nil && !youtube.Refused(err) }
+
+// checkLine is one server's check as deploy prints it.
+func checkLine(label string, err error) string {
+	switch {
+	case err == nil:
+		return "  " + label + ": YouTube answers."
+	case down(err):
+		return "  " + label + ": not answering (" + err.Error() + ")."
+	}
+	return "  " + label + ": " + err.Error()
+}
+
+// verdict says what the two checks mean for the address, which is the first server's; the
+// backup makes the YouTube calls the first can't. Without it a refused first server reads
+// as a broken deployment, though its address works.
+func verdict(name, region string, first, second error) string {
+	here := place(region)
+	switch {
+	case down(first):
+		return fmt.Sprintf("Clients can't use the address until %s answers; its logs are on vercel.com, in the project %s.", here, name)
+	case first == nil && second == nil:
+		return ""
+	case first == nil:
+		return fmt.Sprintf("The address works, but until the backup recovers, nothing covers %s if YouTube refuses it.", here)
+	case second == nil:
+		return fmt.Sprintf("The backup makes the YouTube calls %s can't, so the address works. Nothing to do.", here)
+	}
+	// Regions whose WARP exits YouTube accepted in October 2026, as the README says.
+	other := "sfo1"
+	if region == other {
+		other = "gru1"
+	}
+	again := "rustle-mcp deploy --region " + other
+	if name != "rustle-mcp" {
+		again += " --name " + name
+	}
+	return fmt.Sprintf("YouTube calls fail for now; web pages and media URLs still work. YouTube may accept them\n"+
+		"again within the hour, or move to %s now: %s", place(other), again)
+}
+
 // checkHosted asks a new server for a transcript, which needs YouTube to answer it: the
-// server itself, never its backup. The first request also waits out a cold start.
+// server itself, never its backup. The first request also waits out a cold start. When
+// YouTube refuses the server, the error carries the code youtube.Refused knows.
 func checkHosted(address string) error {
 	client := &http.Client{Timeout: 90 * time.Second}
 	session := ""
@@ -293,9 +342,10 @@ func checkHosted(address string) error {
 		_ = json.Unmarshal([]byte(reply), &message)
 		var failure struct {
 			Error string `json:"error"`
+			Code  string `json:"code"`
 		}
 		if len(message.Result.Content) > 0 && json.Unmarshal([]byte(message.Result.Content[0].Text), &failure) == nil && failure.Error != "" {
-			return errors.New(failure.Error)
+			return rustle.Fail(failure.Error, failure.Code, "")
 		}
 		return errors.New(reply)
 	}
