@@ -28,8 +28,9 @@ func TestRefusedCallsGoToTheBackup(t *testing.T) {
 
 	settings := testSettings(t).Copy()
 	settings.Backup = backup.URL + "/mcp/t"
+	code := "YOUTUBE_ACCESS_DENIED"
 	refused := func(*rustle.Call, TranscriptArgs) (*rustle.Result, error) {
-		return nil, rustle.Fail("YouTube refused.", "YOUTUBE_ACCESS_DENIED", "")
+		return nil, rustle.Fail("YouTube refused.", code, "")
 	}
 	transcript := func() mcp.Tool {
 		for _, tool := range NewServer(settings, Ops{Transcript: refused}).Tools() {
@@ -39,16 +40,21 @@ func TestRefusedCallsGoToTheBackup(t *testing.T) {
 		}
 		return mcp.Tool{}
 	}
-	result := transcript().Call(context.Background(), "claude-ai", map[string]any{"source": "jNQXAC9IVRw"})
-	if result.IsError || len(result.Content) != 1 || result.Content[0].Text != "from the backup: jNQXAC9IVRw" {
-		t.Fatalf("result %+v", result)
+	// A 429 is a refusal too: YouTube rate limits one region's WARP exit while another's answers.
+	for _, code = range []string{"YOUTUBE_ACCESS_DENIED", "RATE_LIMITED"} {
+		client, forwarded = "", false
+		result := transcript().Call(context.Background(), "claude-ai", map[string]any{"source": "jNQXAC9IVRw"})
+		if result.IsError || len(result.Content) != 1 || result.Content[0].Text != "from the backup: jNQXAC9IVRw" {
+			t.Fatalf("%s: result %+v", code, result)
+		}
+		if client != "claude-ai" || !forwarded {
+			t.Errorf("%s: backup saw client %q, forwarded %v", code, client, forwarded)
+		}
 	}
-	if client != "claude-ai" || !forwarded {
-		t.Errorf("backup saw client %q, forwarded %v", client, forwarded)
-	}
+	code = "YOUTUBE_ACCESS_DENIED"
 
 	// The backup's own errors are its answer.
-	result = transcript().Call(context.Background(), "claude-ai", map[string]any{"source": "captionless"})
+	result := transcript().Call(context.Background(), "claude-ai", map[string]any{"source": "captionless"})
 	if !result.IsError || !strings.Contains(result.Content[0].Text, "NO_CAPTIONS") {
 		t.Errorf("backup's error: %+v", result)
 	}

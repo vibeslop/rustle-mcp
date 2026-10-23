@@ -477,8 +477,9 @@ func player(ctx context.Context, id, client, visitor string) (any, error) {
 	return data, err
 }
 
-// refused is true for an error that means YouTube distrusts the address the request came from.
-func refused(err error) bool { return rustle.HasCode(err, "YOUTUBE_ACCESS_DENIED", "RATE_LIMITED") }
+// Refused is true for an error that means YouTube distrusts the address the request came
+// from, so another route or region may get an answer.
+func Refused(err error) bool { return rustle.HasCode(err, "YOUTUBE_ACCESS_DENIED", "RATE_LIMITED") }
 
 // rerouted runs work, and runs it again through the next route (RUSTLE_PROXIES) each time
 // YouTube refuses the current one. Work starts over on the new route: media links are
@@ -487,7 +488,7 @@ func rerouted[T any](work func() (T, error)) (T, error) {
 	for {
 		via := fetch.Route()
 		v, err := work()
-		if err == nil || !refused(err) || !fetch.Refuse(via) {
+		if err == nil || !Refused(err) || !fetch.Refuse(via) {
 			return v, err
 		}
 	}

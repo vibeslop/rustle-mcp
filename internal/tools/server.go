@@ -15,6 +15,7 @@ import (
 
 	"github.com/vibeslop/rustle-mcp/internal/mcp"
 	"github.com/vibeslop/rustle-mcp/internal/rustle"
+	"github.com/vibeslop/rustle-mcp/internal/youtube"
 )
 
 const Instructions = `Rustle reads videos: YouTube, web pages, media URLs and local files; pass the link, path or YouTube id as source. Repeat calls are cached.
@@ -193,7 +194,7 @@ func tool[T any](s *Server, name, description string, schema *rustle.Obj, parse 
 			call.Notes.Add(notes...)
 			result, err = op(call, parsed)
 			if err != nil {
-				if s.settings.Backup != "" && rustle.HasCode(err, "YOUTUBE_ACCESS_DENIED") && !mcp.Forwarded(ctx) {
+				if s.settings.Backup != "" && youtube.Refused(err) && !mcp.Forwarded(ctx) {
 					if out, ferr := forward(ctx, s.settings.Backup, client, name, raw); ferr == nil {
 						return out
 					}
