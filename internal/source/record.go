@@ -126,11 +126,15 @@ type Input struct {
 	Start float64
 	// Offset is the timeline time of the input's first timestamp.
 	Offset float64
+	// Size is the picture's size when it isn't the record's: a YouTube sheet window is a
+	// smaller format than the one the record describes.
+	Size [2]int
 }
 
-// MediaInput is what ffmpeg should open for [start, end] of a track.
+// MediaInput is what ffmpeg should open for [start, end] of a track: "video", "audio", or
+// "sheet", video for contact sheets, which on YouTube is a smaller format.
 func MediaInput(c *rustle.Call, record *rustle.Record, track string, start, end float64) (Input, error) {
-	if track == "video" && record.HasVideo != nil && !*record.HasVideo {
+	if track != "audio" && record.HasVideo != nil && !*record.HasVideo {
 		return Input{}, rustle.NoVideoTrack(record.Title)
 	}
 	if track == "audio" && record.HasAudio != nil && !*record.HasAudio {
@@ -145,7 +149,7 @@ func MediaInput(c *rustle.Call, record *rustle.Record, track string, start, end 
 		if err != nil {
 			return Input{}, err
 		}
-		return Input{Input: window.Input, Start: info.Start, Offset: window.Offset}, nil
+		return Input{Input: window.Input, Start: info.Start, Offset: window.Offset, Size: [2]int{info.Width, info.Height}}, nil
 	}
 	return Input{Input: record.Input, Start: record.Origin}, nil
 }
