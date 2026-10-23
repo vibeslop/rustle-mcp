@@ -172,7 +172,7 @@ Claude Code: claude mcp add --transport http rustle %s
 Codex: codex mcp add rustle --url %s
 Cursor, in mcp.json: "rustle": {"url": "%s"}
 
-The address is saved in %s.%s
+Deploying again keeps this address: its token is saved in %s.%s
 `, status, address, address, address, address, tokenFile, note)
 	return nil
 }
