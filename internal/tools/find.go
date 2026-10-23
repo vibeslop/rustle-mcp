@@ -289,5 +289,45 @@ func find(c *rustle.Call, raw FindArgs) (*rustle.Result, error) {
 	}
 	text := RenderRows(rows, meta)
 	meta.Set("count", len(rows))
+	// Searches and channels are where an agent picks among strangers' videos. Handing each
+	// long one to a subagent pays: comparing three or four talks of 30-70 minutes, Sonnet
+	// ended with 36% less in its context and spent 14% less. For videos of 1-4 minutes it
+	// saved nothing, cost 27% more and took twice as long, so short lists get no hint.
+	if args.URL == "" && long(rows) >= 3 {
+		meta.Set("hint", choosing)
+	}
 	return &rustle.Result{Meta: meta, Content: []rustle.Block{rustle.TextBlock(text)}}, nil
 }
+
+// longMinutes is the length from which a video is worth a subagent's summary. Measured
+// only at 1-4 and 30-70 minutes; 20 sits between.
+const longMinutes = 20
+
+// long is how many rows run longMinutes or more; a row without a length isn't counted.
+func long(rows []rustle.VideoRow) int {
+	count := 0
+	for _, r := range rows {
+		// "12:49" or "1:02:03"; anything else, such as "LIVE", is no length.
+		seconds := 0
+		for _, part := range strings.Split(r.Duration, ":") {
+			n, err := strconv.Atoi(strings.TrimSpace(part))
+			if err != nil {
+				seconds = 0
+				break
+			}
+			seconds = seconds*60 + n
+		}
+		if seconds >= longMinutes*60 {
+			count++
+		}
+	}
+	return count
+}
+
+// choosing tells the agent what to do rather than offering: worded as "if you can start
+// subagents", Sonnet read it and watched every candidate itself in 4 runs of 4; worded
+// so, it delegated in 4 of 4.
+const choosing = "Before watching more than two of these, delegate: start one subagent per candidate, in parallel, " +
+	"on your smallest model (Haiku, Flash, Luna or similar). Each calls watch_video with frames=24 and replies in a few lines; " +
+	"then watch only the one you pick. Their frames and transcripts stay out of your context. " +
+	"Only without subagents, watch them yourself."

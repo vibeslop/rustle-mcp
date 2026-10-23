@@ -182,3 +182,26 @@ func TestListingLines(t *testing.T) {
 		}
 	})
 }
+
+func TestASearchOfLongVideosTellsTheAgentToDelegate(t *testing.T) {
+	video := func(id, length string) string {
+		return `{"videoRenderer":{"videoId":"` + id + `","title":{"runs":[{"text":"Talk"}]},"lengthText":{"simpleText":"` + length + `"}}}`
+	}
+	results := func(videos ...string) string {
+		return `{"contents":{"twoColumnSearchResultsRenderer":{"primaryContents":{"sectionListRenderer":{"contents":[{"itemSectionRenderer":{"contents":[` +
+			strings.Join(videos, ",") + `]}}]}}}}}`
+	}
+	for _, c := range []struct {
+		videos []string
+		hint   any
+	}{
+		{[]string{video("Ab3dEf6hIj0", "34:10"), video("Kl9mNo2pQr4", "1:02:03"), video("St5uVw8xYz1", "20:00")}, choosing},
+		// Two long videos are few enough to watch; short ones cost a subagent more than they save.
+		{[]string{video("Ab3dEf6hIj0", "34:10"), video("Kl9mNo2pQr4", "1:02:03"), video("St5uVw8xYz1", "19:59")}, nil},
+		{[]string{video("Ab3dEf6hIj0", "3:40"), video("Kl9mNo2pQr4", "1:18"), video("St5uVw8xYz1", "LIVE")}, nil},
+	} {
+		serve(t, map[string]string{"*": results(c.videos...)})
+		result, _ := findOK(t, newCall(t, testSettings(t), "test"), FindArgs{Query: "talks", Limit: 10})
+		equal(t, metaField(result.Meta, "hint"), c.hint)
+	}
+}
