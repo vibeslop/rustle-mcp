@@ -1,6 +1,21 @@
 package main
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+)
+
+func TestPinned(t *testing.T) {
+	got := pinned(vercelDockerfile, "1.2.3")
+	if !bytes.Contains(got, []byte("ARG VERSION=v1.2.3\n")) || !bytes.Contains(got, []byte("rustle-mcp@$VERSION;")) {
+		t.Errorf("release not pinned:\n%s", got)
+	}
+	for _, version := range []string{"dev", "1.2.3-0.20261020214600-4ad0bf9c1a2b"} {
+		if got := pinned(vercelDockerfile, version); !bytes.Equal(got, vercelDockerfile) {
+			t.Errorf("%s pinned:\n%s", version, got)
+		}
+	}
+}
 
 func TestProductionURL(t *testing.T) {
 	answer := []byte(`Vercel CLI 64.7.0

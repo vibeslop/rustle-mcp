@@ -96,7 +96,7 @@ Rustle can also run on a server, for agents that can't start a program on your c
 rustle-mcp deploy
 ```
 
-It logs you in to Vercel first if needed (through the Vercel CLI, which Node's `npx` fetches), deploys the server, checks that YouTube answers it, and prints its private address. In claude.ai, open Settings, then Connectors, add a custom connector, paste the address and choose No sign-in. The command also prints a line for Claude Code, Codex and Cursor. Running it again updates the server and keeps the address.
+It logs you in to Vercel first if needed (through the Vercel CLI, which Node's `npx` fetches), deploys the server, checks that YouTube answers it, and prints its private address. In claude.ai, open Settings, then Connectors, add a custom connector, paste the address and choose No sign-in. The command also prints a line for Claude Code, Codex and Cursor. The server runs the version of Rustle that deployed it: after updating Rustle, run the command again to update the server, and the address stays the same.
 
 **How it gets past YouTube.** YouTube refuses most data-center addresses with "Sign in to confirm you're not a bot". So the server registers a free Cloudflare WARP device as it starts and sends its requests through that tunnel, over IPv4, from an address YouTube trusts far more than the host's. Which addresses it trusts varies by region and changes over time: in October 2026 it accepted WARP's exits in Frankfurt, Washington, San Francisco, São Paulo, Sydney and Cape Town, and refused London, Tokyo, Singapore and Mumbai. So `rustle-mcp deploy` sets up two servers, in Frankfurt and in Washington (`--region` picks the first). When YouTube refuses the first, it hands that call to the other and returns its answer.
 

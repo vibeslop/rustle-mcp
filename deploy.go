@@ -31,7 +31,8 @@ const deployHelp = `rustle-mcp deploy: put Rustle on Vercel, for agents that can
 
 Logs in to Vercel if needed, deploys a server and a backup in another region with one
 private address, checks that YouTube answers them, and prints the address to give your
-clients. Running it again updates both and keeps the address.
+clients. Both run this version of rustle-mcp: after updating it, run this again to
+update them; the address stays the same.
 
   --name NAME      Vercel project name (default rustle-mcp)
   --region REGION  Vercel region (default fra1, Frankfurt); a backup goes to another
@@ -89,14 +90,14 @@ func deployTo(name, region string, out io.Writer) error {
 		}
 	}
 
-	// From a checkout, its own code is deployed; anywhere else, the latest release.
+	// From a checkout, its own code is deployed; anywhere else, this binary's release.
 	dir, err := os.Getwd()
 	if err != nil || !checkout(dir) {
 		if dir, err = os.MkdirTemp("", "rustle-deploy-"); err != nil {
 			return err
 		}
 		defer os.RemoveAll(dir)
-		if err := os.WriteFile(filepath.Join(dir, "Dockerfile.vercel"), vercelDockerfile, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "Dockerfile.vercel"), pinned(vercelDockerfile, versionString()), 0o644); err != nil {
 			return err
 		}
 		if err := os.WriteFile(filepath.Join(dir, "vercel.json"), vercelConfig, 0o644); err != nil {
@@ -190,6 +191,17 @@ func vercelCLI() ([]string, error) {
 		return []string{path, "--yes", "vercel@latest"}, nil
 	}
 	return nil, errors.New("deploying uses the Vercel CLI, which needs Node.js: install it from https://nodejs.org, then run this again")
+}
+
+// pinned makes the Dockerfile build the release this binary is. The latest release would
+// be wrong twice: an older binary would deploy code its user never installed, and just
+// after a release the module mirror can still call the previous one latest for up to half
+// an hour. A build that isn't a release keeps latest.
+func pinned(dockerfile []byte, version string) []byte {
+	if !release.MatchString("v" + version) {
+		return dockerfile
+	}
+	return bytes.Replace(dockerfile, []byte("ARG VERSION=latest"), []byte("ARG VERSION=v"+version), 1)
 }
 
 // checkout is true in a clone of Rustle, whose own code then gets deployed.
