@@ -17,19 +17,20 @@ Prefer simple systems and software that feels obvious. Find the real constraint,
 ## Glossary
 
 - **Source**: what a tool's `source` argument names: a YouTube link or id, a web page, a media or HLS URL, or a local path. Resolved once into a **record** (`rustle.Record`) and cached.
-- **Sheet** and **cell**: a contact-sheet image from `watch_video`, and one frame in it, labelled `#n m:ss.ss`. Consecutive near-identical frames share one cell (`#3-5 ...`).
+- **Sheet** and **cell**: a contact-sheet image from `watch_video`, and one frame in it, labelled `#n m:ss.ss` in a strip above it, never over the picture. Consecutive near-identical frames share one cell (`#3-5 ...`). The text after a sheet repeats each label, followed by what is said between that cell and the next.
 - **Crop**: `[x, y, w, h]` as fractions of the frame from the top left. A crop gets the whole frame's pixel budget and is enlarged up to 4x when small.
-- **Digest**: the default transcript, the key sentences verbatim, about a third of the words.
+- **Watching** and **overview**: `watch_video`'s two ways of looking. Watching, the default, is a frame a second and every word from `start_seconds`, two minutes a call (`MaxFrames`); past ten minutes the result tells the agent to hand ten-minute parts to subagents. An overview is `frames` spread across the span with the digest.
+- **Digest**: an overview's transcript, the key sentences verbatim, about a third of the words.
 - **Patch**: Claude's 28 x 28 px image unit, one token.
 - **Client** or **harness**: the app running the agent: Claude Code, Codex, Cursor. Its name picks a profile in `internal/rustle/client.go`.
-- **Window**: a few seconds of a YouTube stream fetched by byte range, cached, and handed to ffmpeg.
+- **Window**: a few seconds of a YouTube stream fetched by byte range, cached, and handed to ffmpeg. Uncropped sheets read a 480p format (`sheet`), single frames and crops the sharpest up to 1080p (`video`).
 - **Storyboard**: YouTube's grid of small thumbnails, used for cheap overviews.
 - **Warm process**: an ffmpeg started ahead of a call and waiting for its options (`internal/proc/warm.go`).
 
 ## Where things are
 
 - `main.go`: startup and the CLI (`--help`, `--version`, `http`); `deploy.go`: `rustle-mcp deploy`, which puts Rustle on Vercel; `tunnel.go` and `warp.go`: the WARP tunnel `rustle-mcp http` starts when wireproxy is installed, as in the container; `setup.go`: `rustle-mcp setup`, which adds the binary to Claude Code, Codex and Cursor, ticked in a checklist (`checklist.go`, keys read by `internal/term`). `install.sh` and `install.ps1` download the latest release and run it, so installing is one command; keep it that way.
-- `internal/mcp`: the JSON-RPC transports, stdio and Streamable HTTP (`http.go`; `Dockerfile`, `Dockerfile.vercel` and `vercel.json` host it). `internal/tools`: tool schemas, argument parsing, how results are rendered, one file per tool, and handing calls YouTube refuses to a backup server (`backup.go`).
+- `internal/mcp`: the JSON-RPC transports, stdio and Streamable HTTP (`http.go`; `Dockerfile`, `Dockerfile.vercel` and `vercel.json` host it). `internal/tools`: tool schemas, argument parsing, how results are rendered, one file per tool, and handing calls YouTube refuses to a backup server (`backup.go`). `watch_video` runs three parts side by side, pictures (`watch.go`), speech (`transcript.go`) and sound (`listen.go`), and lays the speech out under the frames once they are decoded.
 - `internal/source`: turning a source into a record (`Identify`, `Resolve`, `Probed`, `MediaInput`), web pages and local folders.
 - `internal/youtube`: player requests, captions, DASH windows, storyboards, search.
 - `internal/media`: ffmpeg commands, frame sampling, sheet layout, the MP4 index reader. `internal/imaging`: the JPEG and PNG encoders and the bitmap font. `internal/audio`: analysis, FFT, spectrogram.
