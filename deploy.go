@@ -284,7 +284,7 @@ func verdict(name, region string, first, second error) string {
 	case second == nil:
 		return fmt.Sprintf("The backup makes the YouTube calls %s can't, so the address works. Nothing to do.", here)
 	}
-	// Regions whose WARP exits YouTube accepted in October 2026, as the README says.
+	// Regions whose WARP exits YouTube accepted in October 2026, as AGENTS.md says.
 	other := "sfo1"
 	if region == other {
 		other = "gru1"
