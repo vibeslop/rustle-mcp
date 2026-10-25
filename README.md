@@ -2,12 +2,12 @@
 
 [![CI](https://github.com/vibeslop/rustle-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/vibeslop/rustle-mcp/actions/workflows/ci.yml)
 
-Rustle is an MCP server for agents to watch videos. Instead of letting the agent look at frames or read a transcript, it offers both at the same time with `watch_video`.
+Rustle is an MCP server for AI agents to watch videos. Instead of letting the agent look at frames or read a transcript, it offers both at the same time with `watch_video`.
 
 You can send the agent YouTube and website links, as well as video files. Here is what you can ask it:
 
 1. Find me a guide for my situation based on your memories.
-2. I want to buy a new laptop. Watch several reviews. Ignore what you think is paid or provides low value. Then suggest which laptop to buy regardless of the budget.
+2. I want to buy a new laptop. Watch several reviews and do online research. Ignore what you think is paid or provides low value. Then suggest which laptop to buy regardless of the budget.
 
 ## Install
 
